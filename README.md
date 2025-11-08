@@ -54,7 +54,26 @@ Taal/
 ## Running Key Components
 
 - **Desktop App:** `cargo run -p taal-desktop` launches the GUI with extractor, tutor, and marketplace placeholders.
-- **Transcription CLI:** `cargo run -p taal-transcriber -- <path-to-audio>` prints a JSON transcription using the mock pipeline.
+- **Transcription CLI:** `cargo run -p taal-transcriber -- <path-to-audio>` prints a JSON transcription using the current mock pipeline.
 - **Dataset Tool:** `cargo run -p dataset-pipeline -- <annotations.json>` validates and counts classifier annotations.
 
 Each crate includes targeted unit tests. Execute `cargo test --workspace` for the full suite (requires network access to download dependencies on first run).
+
+## What “Transcribe” Does Today
+
+The current transcriber is a functional prototype meant to validate data flow end‑to‑end:
+
+- Decodes audio using `symphonia` (WAV/MP3/FLAC/AAC/Vorbis supported by enabled features).
+- Estimates a placeholder tempo from signal length.
+- Performs a simple quantization pass that emits alternating bass/snare events with velocities derived from local energy.
+- Exports a `LessonDescriptor` as JSON via the domain exporter.
+
+This is not a production model yet. Tempo tracking, onset detection, drum classification, and quantization are intentionally simple and will be replaced.
+
+Recommended input: short mono/stereo files at 44.1k or 48k sample rate in common formats (WAV/MP3/FLAC/OGG/AAC). Very long files will work but are slower to process.
+
+## Notable Implementation Choices
+
+- TLS stack uses `rustls` via `reqwest` to avoid system OpenSSL requirements.
+- Audio decoding uses `symphonia` with features for `aac`, `flac`, `mp3`, `vorbis`, and `wav`.
+- `realfft` is pinned to `3.5` (future DSP), not yet used in code.

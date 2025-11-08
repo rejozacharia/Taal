@@ -24,12 +24,12 @@ impl MarketplaceClient {
     }
 
     pub async fn list_items(&self) -> Result<Vec<MarketplaceItem>> {
-        info!("listing marketplace items", endpoint = %self.endpoint);
+        info!("listing marketplace items endpoint={}", self.endpoint);
         Ok(Vec::new())
     }
 
     pub async fn upload_lesson(&self, lesson: &LessonDescriptor) -> Result<()> {
-        info!("uploading lesson", id = %lesson.id, endpoint = %self.endpoint);
+        info!("uploading lesson id={} endpoint={}", lesson.id, self.endpoint);
         Ok(())
     }
 }

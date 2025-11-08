@@ -12,4 +12,4 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
-time = "0.3"
+time = { version = "0.3", features = ["serde"] }

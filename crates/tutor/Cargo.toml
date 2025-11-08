@@ -20,3 +20,6 @@ path = "../domain"
 
 [dependencies.taal-audio]
 path = "../audio"
+
+[dev-dependencies]
+time = "0.3"

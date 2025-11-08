@@ -14,3 +14,6 @@ anyhow.workspace = true
 
 [dependencies.taal-domain]
 path = "../domain"
+
+[dev-dependencies]
+time = "0.3"

@@ -2,10 +2,10 @@
 
 This document dives deeper into each planned crate/application within the Taal workspace so that implementation work can start without additional upfront design.
 
-## Workspace Layout
+## Workspace Layout (implemented)
 ```
 Taal/
-├─ Cargo.toml            # Workspace manifest (to be created)
+├─ Cargo.toml            # Workspace manifest
 ├─ crates/
 │  ├─ domain/
 │  ├─ transcriber/
@@ -34,7 +34,7 @@ Key modules:
 
 Dependencies:
 - `serde` with `serde_json` and `serde_yaml` for storage.
-- `time` for precise timestamp handling.
+- `time` with the `serde` feature for serializing durations.
 
 ### `crates/audio`
 Purpose: Common audio utilities used by both the transcriber and the tutoring playback engine.
@@ -48,6 +48,10 @@ Key modules:
 Threads:
 - Real-time audio thread owning the stream, communicating with analysis/playback tasks via lock-free ring buffers (`ringbuf`).
 
+Notes:
+- File decoding via `symphonia` is implemented. Streamed playback is planned.
+- `realfft` (v3.5) reserved for future DSP; not yet used.
+
 ### `crates/transcriber`
 Purpose: Convert audio into structured drum notation.
 
@@ -57,13 +61,12 @@ Key modules:
 - `notation`: maps classified hits into `domain::events` and `domain::io` export formats.
 - `cli`: optional binary exposing batch processing and JSON/CLI reporting.
 
-Data flow:
-1. Audio buffer from `audio::io`.
-2. Preprocess with `audio::dsp` (normalization, HP filter).
-3. Onset detection (`pipeline::onset`) yields candidate hits.
-4. Classifier attaches instrument labels + confidence scores.
-5. Quantizer snaps to tempo grid and emits domain events.
-6. Writer exports to MusicXML/MIDI using `domain::io`.
+Data flow (prototype):
+1. Audio buffer from `audio::io` using `symphonia`.
+2. Basic normalization in `audio::dsp` (available utility).
+3. Tempo estimated from buffer statistics (placeholder logic).
+4. Quantizer emits alternating bass/snare events from energy (placeholder).
+5. Exporter writes JSON via `domain::io` (MusicXML/MIDI later).
 
 ### `crates/notation`
 Purpose: Visual rendering and editing of drum notation for both the desktop app and potential web exports.
@@ -91,7 +94,7 @@ Threading model:
 Purpose: Optional networking and marketplace integration.
 
 Key modules:
-- `api`: HTTP client wrappers (using `reqwest`) for marketplace endpoints.
+- `api`: HTTP client wrappers for marketplace endpoints using `reqwest` with `rustls` TLS.
 - `auth`: token storage and refresh flows.
 - `sync`: upload/download lesson packs and practice history.
 
@@ -109,6 +112,10 @@ Structure:
 State Management:
 - Use the `tauri`-style pattern with a central `AppState` struct referencing the active project, audio devices, and loaded lessons.
 - Background tasks run on `tokio` runtime to execute transcription without blocking the UI.
+
+Implementation snapshot:
+- Desktop app wires Extractor/Tutor/Marketplace tabs to crate APIs.
+- Error paths avoid non-Send/Sync GUI errors; logging via `tracing`/`tracing-subscriber`.
 
 ### `tools/dataset-pipeline`
 Utility crate/binary for preparing labeled datasets for the classifier.

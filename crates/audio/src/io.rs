@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use symphonia::core::audio::{AudioBufferRef, Signal};
+use symphonia::core::audio::{AudioBufferRef, SampleBuffer, Signal};
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -56,33 +56,45 @@ impl AudioDecoder {
                     let buffer = decoder.decode(&packet)?;
                     match buffer {
                         AudioBufferRef::F32(buf) => {
-                            for frame in buf.chan_iter() {
-                                samples.extend_from_slice(frame);
+                            let channels = buf.spec().channels.count() as usize;
+                            for ch in 0..channels {
+                                let data = buf.chan(ch);
+                                samples.extend_from_slice(data);
                             }
                         }
                         AudioBufferRef::U8(buf) => {
-                            for frame in buf.chan_iter() {
-                                samples
-                                    .extend(frame.iter().map(|&s| (s as f32 / 255.0) * 2.0 - 1.0));
+                            let channels = buf.spec().channels.count() as usize;
+                            for ch in 0..channels {
+                                let data = buf.chan(ch);
+                                samples.extend(data.iter().map(|&s| (s as f32 / 255.0) * 2.0 - 1.0));
                             }
                         }
                         AudioBufferRef::S16(buf) => {
-                            for frame in buf.chan_iter() {
-                                samples.extend(frame.iter().map(|&s| s as f32 / i16::MAX as f32));
+                            let channels = buf.spec().channels.count() as usize;
+                            for ch in 0..channels {
+                                let data = buf.chan(ch);
+                                samples.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
                             }
                         }
                         other => {
-                            let mut temp = other.make_equivalent();
-                            temp.copy_interleaved_ref(other);
-                            samples.extend(temp.chan_iter().flat_map(|chan| chan.iter().copied()));
+                            let spec = *other.spec();
+                            let frames = other.frames() as u64;
+                            let mut out = SampleBuffer::<f32>::new(frames, spec);
+                            out.copy_interleaved_ref(other);
+                            samples.extend_from_slice(out.samples());
                         }
                     }
                 }
                 Err(err) => {
-                    if err.is_eof() {
-                        break;
-                    } else {
-                        return Err(err.into());
+                    use symphonia::core::errors::Error as SymphError;
+                    match err {
+                        SymphError::IoError(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                            break;
+                        }
+                        SymphError::DecodeError(_) => {
+                            // skip undecodable packet
+                        }
+                        _ => return Err(err.into()),
                     }
                 }
             }

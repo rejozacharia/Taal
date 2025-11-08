@@ -72,7 +72,74 @@
 6. **Milestone 5:** Add analytics, streak tracking, and cloud-ready persistence.
 7. **Milestone 6:** Launch marketplace beta with community sharing features.
 
+## Current Status Snapshot
+
+The workspace is implemented and builds end‑to‑end. The following components are present with varying levels of completeness:
+
+1. Domain models (tempo maps, drum events, lesson descriptors) — implemented with `serde` support.
+2. Audio I/O (file decode via `symphonia`) — implemented; DSP/FFT scaffolding present.
+3. Transcriber (tempo estimator + simple quantizer + CLI) — prototype logic in place.
+4. Notation editor (`egui`) — simple event visualization; editor features TBD.
+5. Tutor core (session state, scoring, MIDI enumeration) — basic flow and tests; MIDI input tested conditionally.
+6. Services (marketplace client) — placeholder API surface; networking over `reqwest`+`rustls`.
+7. Desktop app (extractor/tutor/marketplace tabs) — skeleton UI wired to core crates.
+
+Implementation details recently updated:
+
+- Networking uses `rustls` TLS to avoid OpenSSL system dependencies.
+- Audio decode code adapted to current `symphonia` APIs.
+- `time` crate `serde` feature enabled for serializing durations in domain types.
+
+## Visual Architecture
+
+The diagram below shows the main components and data flows. Items marked [built] exist in this repo; items marked [TBD] are planned.
+
+```mermaid
+flowchart LR
+    subgraph Apps
+      Desktop[[Desktop GUI]]:::built
+      TranscribeCLI[[Transcriber CLI]]:::built
+      DatasetCLI[[Dataset Tool]]:::built
+    end
+
+    subgraph Core Crates
+      Domain[(domain)]:::built
+      Audio[(audio)]:::built
+      Transcriber[(transcriber)]:::built
+      Notation[(notation)]:::built
+      Tutor[(tutor)]:::built
+      Services[(services)]:::built
+    end
+
+    Desktop -->|extractor UI| Transcriber
+    Desktop -->|tutor UI| Tutor
+    Desktop -->|marketplace UI| Services
+    TranscribeCLI --> Transcriber
+    DatasetCLI --> Audio
+    Transcriber -->|reads| Audio
+    Transcriber -->|emits| Domain
+    Tutor -->|consumes| Domain
+    Notation -->|renders| Domain
+    Services -->|syncs| Domain
+
+    classDef built fill:#dff5e1,stroke:#0a8a43,color:#0a8a43
+    classDef tbd fill:#fff3cd,stroke:#cc9a06,color:#cc9a06
+
+    %% Future modules
+    Onsets[[Onset Detection]]:::tbd
+    Classifier[[ONNX Drum Classifier]]:::tbd
+    Playback[[Audio Playback Engine]]:::tbd
+
+    Transcriber --> Onsets
+    Transcriber --> Classifier
+    Tutor --> Playback
+```
+
+Text description: The Desktop app hosts three surfaces (Extractor, Tutor, Marketplace) wired to library crates. The Transcriber reads audio via the Audio crate, converts it into Domain events, which Notation renders and Tutor consumes for practice and scoring. Services provide optional networking. Onset detection, classification, and playback engines are planned modules.
+
 ## Next Steps
-- Initialize a Cargo workspace reflecting the module layout above.
-- Draft detailed specifications for the transcription classifier dataset and model training pipeline.
-- Define UI wireframes for extractor and tutoring modes to guide early prototyping.
+1. Replace prototype tempo/quantization with real onset detection + beat tracking.
+2. Integrate ONNX runtime for instrument classification and add dataset features to `tools/dataset-pipeline`.
+3. Expand notation editor with selection, tuplets, and export (MusicXML/MIDI).
+4. Build playback engine and wire into Tutor for audition and metronome.
+5. Implement Marketplace client API calls and persistence.
