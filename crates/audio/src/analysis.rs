@@ -29,7 +29,7 @@ impl DrumClassifier for MockClassifier {
 }
 
 pub fn load_mock_classifier<P: AsRef<Path>>(path: P) -> Result<MockClassifier> {
-    info!("loading classifier placeholder", model = ?path.as_ref());
+    info!("loading classifier placeholder: {:?}", path.as_ref());
     Ok(MockClassifier)
 }
 

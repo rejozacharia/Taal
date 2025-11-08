@@ -9,9 +9,9 @@ pub struct TempoEstimator;
 impl TempoEstimator {
     pub fn estimate(&self, samples: &[f32], sample_rate: u32) -> Result<TempoMap> {
         debug!(
-            "estimating tempo",
+            "estimating tempo sample_rate={} sample_count={}",
             sample_rate,
-            sample_count = samples.len()
+            samples.len()
         );
         let bpm = if samples.is_empty() {
             120.0

@@ -29,7 +29,7 @@ impl TranscriptionPipeline {
 
     #[instrument(skip(self))]
     pub fn transcribe(&self, job: &TranscriptionJob) -> Result<LessonDescriptor> {
-        info!("loading audio", path = %job.audio_path);
+        info!("loading audio path={}", job.audio_path);
         let audio = AudioDecoder::open(&job.audio_path)?;
         let tempo = self.tempo.estimate(&audio.samples, audio.sample_rate)?;
         let events: Vec<NotatedEvent> = self.quantizer.quantize(&audio.samples, &tempo);

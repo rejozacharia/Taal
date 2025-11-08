@@ -1,4 +1,5 @@
 use clap::Parser;
+use taal_domain::NotationExporter;
 use taal_transcriber::{TranscriptionJob, TranscriptionPipeline};
 use tracing_subscriber::EnvFilter;
 

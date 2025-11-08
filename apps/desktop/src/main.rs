@@ -17,11 +17,13 @@ fn main() -> anyhow::Result<()> {
 
     let rt = Arc::new(Runtime::new()?);
     let options = eframe::NativeOptions::default();
+    let rt_clone = rt.clone();
     eframe::run_native(
         "Taal Desktop",
         options,
-        Box::new(|_cc| Box::new(DesktopApp::new(rt.clone()))),
-    )?;
+        Box::new(move |_cc| Box::new(DesktopApp::new(rt_clone.clone()))),
+    )
+    .map_err(|e| anyhow::anyhow!(format!("{e:?}")))?;
     Ok(())
 }
 
@@ -157,7 +159,7 @@ impl TutorPane {
     }
 
     fn load_lesson(&mut self, lesson: LessonDescriptor) {
-        info!("loading lesson into tutor", id = %lesson.id);
+        info!("loading lesson into tutor id={}", lesson.id);
         self.session = Some(SessionState::new(lesson, PracticeMode::Learn));
         self.hits.clear();
         self.analytics = None;
