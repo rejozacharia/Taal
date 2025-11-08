@@ -144,6 +144,8 @@ struct ExtractorPane {
     loop_drag_start: f64,
     record_latency_ms: f32,
     lane_mode: bool,
+    // Drag state
+    drag_on_selected: bool,
 }
 
 impl ExtractorPane {
@@ -178,6 +180,7 @@ impl ExtractorPane {
             loop_drag_start: 0.0,
             record_latency_ms: 0.0,
             lane_mode: true,
+            drag_on_selected: false,
         }
     }
 
@@ -228,6 +231,8 @@ impl ExtractorPane {
                 );
                 self.editor = Some(NotationEditor::new(lesson));
                 self.status_message = Some("Created new empty chart".to_string());
+                self.selected_event = None;
+                self.playhead = 0.0;
             }
             if ui.button("Load Sample").clicked() {
                 let tempo = TempoMap::constant(100.0).unwrap();
@@ -491,27 +496,44 @@ impl ExtractorPane {
             if let Some(pos) = response.interact_pointer_pos() {
                 // In lane mode, ignore clicks outside the lane band to avoid confusing sticky selection
                 let lane_ok = if self.lane_mode { piece_from_lane_click(pos, response.rect).is_some() } else { true };
-                if !lane_ok { /* ignore click outside lanes */ } else {
+                if !lane_ok { self.selected_event = None; self.drag_on_selected = false; } else {
                 let rect = response.rect;
-                let t = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                // Map x->beat using content bounds (lanes have left/right inset)
+                let (left, right) = if self.lane_mode { (rect.left() + 90.0, rect.right() - 8.0) } else { (rect.left(), rect.right()) };
+                let width = (right - left).max(1.0);
+                let t = ((pos.x - left) / width).clamp(0.0, 1.0);
                 let mut beat = (t as f64) * self.view_span + self.view_start;
                 // Snap to grid based on selection.
                 let step = 4.0_f64 / (self.snap_den as f64); // beats per snap tick
                 beat = (beat / step).round() * step;
 
+                // Determine nearest note in current lane (if any)
+                let lane_piece = if self.lane_mode { piece_from_lane_click(pos, response.rect) } else { None };
+                let near_idx = nearest_event_index(editor, beat, lane_piece);
+                let near_enough = near_idx
+                    .map(|i| (editor.lesson().notation[i].event.beat - beat).abs() <= 0.3)
+                    .unwrap_or(false);
+
+                // Start dragging only if drag starts on an existing note
+                if response.drag_started() {
+                    if let Some(i) = near_idx { if near_enough { self.selected_event = Some(i); self.drag_on_selected = true; } }
+                }
+
                 // Right-click deletes nearest event (by beat) of same piece within threshold.
                 if response.clicked_by(egui::PointerButton::Secondary) {
-                    let del_piece = if self.lane_mode { piece_from_lane_click(pos, response.rect) } else { Some(self.selected_piece) };
+                    let del_piece = lane_piece.or(Some(self.selected_piece));
                     let idx = nearest_event_index(editor, beat, del_piece);
                     if let Some(i) = idx { editor.lesson_mut().notation.remove(i); self.selected_event = None; }
                 }
 
                 // Left-click: select if near existing (in lane when lane_mode), else add
                 if response.clicked_by(egui::PointerButton::Primary) {
-                    let sel_piece = if self.lane_mode { piece_from_lane_click(pos, response.rect) } else { None };
-                    if let Some(i) = nearest_event_index(editor, beat, sel_piece) { if (editor.lesson().notation[i].event.beat - beat).abs() <= 0.3 { self.selected_event = Some(i); } else { self.selected_event = None; } }
-                    if self.selected_event.is_none() {
-                        let piece = if self.lane_mode { piece_from_lane_click(pos, response.rect).unwrap_or(self.selected_piece) } else { self.selected_piece };
+                    if near_enough {
+                        if let Some(i) = near_idx { editor.lesson_mut().notation.remove(i); }
+                        self.selected_event = None;
+                        self.drag_on_selected = false;
+                    } else {
+                        let piece = if self.lane_mode { lane_piece.unwrap_or(self.selected_piece) } else { self.selected_piece };
                         editor.push_event(NotatedEvent::new(
                             DrumEvent::new(
                                 beat,
@@ -525,9 +547,10 @@ impl ExtractorPane {
                 }
 
                 // Drag to move selected
-                if response.dragged() {
+                if self.drag_on_selected && response.dragged() {
                     if let Some(sel) = self.selected_event { if let Some(ev) = editor.lesson_mut().notation.get_mut(sel) { ev.event.beat = beat; } }
                 }
+                if response.drag_released() { self.drag_on_selected = false; }
                 }
             }
             // Keyboard delete
@@ -1551,6 +1574,39 @@ impl SettingsPane {
                         n
                     };
                     for ch in frame { *ch = sample; }
+                    written = written.saturating_add(1);
+                    t += 1.0;
+                }
+            }, |_| {}, None),
+            cpal::SampleFormat::I16 => device.build_output_stream(&cfg.config(), move |data: &mut [i16], _| {
+                let mut rng = 0x12345678u32;
+                for frame in data.chunks_mut(cfg.channels() as usize) {
+                    let env = ((total_samples.saturating_sub(written)) as f32 / total_samples as f32).powf(2.0);
+                    let s = if kind == 0 {
+                        ((2.0*std::f32::consts::PI*freq*t/sr).sin()) * env * gain
+                    } else {
+                        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                        ((rng as f32 / u32::MAX as f32) * 2.0 - 1.0) * env * gain
+                    };
+                    let i = (s * i16::MAX as f32) as i16;
+                    for ch in frame { *ch = i; }
+                    written = written.saturating_add(1);
+                    t += 1.0;
+                }
+            }, |_| {}, None),
+            cpal::SampleFormat::U16 => device.build_output_stream(&cfg.config(), move |data: &mut [u16], _| {
+                let mut rng = 0x12345678u32;
+                let center = (u16::MAX/2) as f32;
+                for frame in data.chunks_mut(cfg.channels() as usize) {
+                    let env = ((total_samples.saturating_sub(written)) as f32 / total_samples as f32).powf(2.0);
+                    let s = if kind == 0 {
+                        ((2.0*std::f32::consts::PI*freq*t/sr).sin()) * env * gain
+                    } else {
+                        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                        ((rng as f32 / u32::MAX as f32) * 2.0 - 1.0) * env * gain
+                    };
+                    let u = (s * center + center).clamp(0.0, u16::MAX as f32) as u16;
+                    for ch in frame { *ch = u; }
                     written = written.saturating_add(1);
                     t += 1.0;
                 }
