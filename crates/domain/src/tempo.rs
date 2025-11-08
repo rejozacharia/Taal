@@ -125,6 +125,11 @@ impl TempoMap {
         }
         Duration::seconds_f64(seconds)
     }
+
+    /// Returns the absolute time (in seconds) at the given beat from the start.
+    pub fn time_at_beat(&self, beat: f64) -> f64 {
+        self.duration_between_beats(0.0, beat).as_seconds_f64()
+    }
 }
 
 #[cfg(test)]

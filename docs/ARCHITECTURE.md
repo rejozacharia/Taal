@@ -22,14 +22,14 @@
    - MIDI ingestion, latency calibration, scoring algorithms, practice mode state machines.
    - Playback engine for backing tracks, click, and synthesized drum sounds.
 4. **Desktop Application (`apps/desktop`):**
-   - Main `egui` application hosting both extractor and tutoring workflows.
+   - Main `egui` application hosting Studio (extractor) and tutoring workflows.
    - Project browser, lesson player, marketplace integration hooks.
 5. **Shared Models (`crates/domain`):**
    - Common data structures (tempo map, drum events, lesson descriptors) shared across modules.
 6. **Services & Marketplace (`crates/services`):**
    - Optional crate for networking, authentication, and content delivery.
 
-## Component 1 – Drum Sheet Extractor
+## Component 1 – Studio (Drum Sheet Extractor)
 ### Features
 - Import WAV/MP3, analyze tempo, classify percussion instruments, quantize hits.
 - Output formats: MusicXML, MIDI, JSON interchange.
@@ -66,7 +66,7 @@
 ## Development Roadmap
 1. **Milestone 0:** Repository scaffolding (Cargo workspace, CI, linting) and audio/MIDI research spikes.
 2. **Milestone 1:** Prototype transcription engine with limited instrument set; CLI proof of concept.
-3. **Milestone 2:** Build desktop extractor UI with waveform visualization and manual correction tools.
+3. **Milestone 2:** Build desktop Studio UI with waveform visualization and manual correction tools.
 4. **Milestone 3:** Implement tutoring core with MIDI input, latency calibration, and simple practice mode.
 5. **Milestone 4:** Integrate notation playback into tutoring UI, support lesson authoring.
 6. **Milestone 5:** Add analytics, streak tracking, and cloud-ready persistence.
@@ -82,7 +82,7 @@ The workspace is implemented and builds end‑to‑end. The following components
 4. Notation editor (`egui`) — simple event visualization; editor features TBD.
 5. Tutor core (session state, scoring, MIDI enumeration) — basic flow and tests; MIDI input tested conditionally.
 6. Services (marketplace client) — placeholder API surface; networking over `reqwest`+`rustls`.
-7. Desktop app (extractor/tutor/marketplace tabs) — skeleton UI wired to core crates.
+7. Desktop app (Studio/Tutor/Marketplace tabs) — skeleton UI wired to core crates.
 
 Implementation details recently updated:
 
