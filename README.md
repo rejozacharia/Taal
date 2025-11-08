@@ -2,7 +2,7 @@
 
 Taal is a drum tutoring software built around two primary experiences:
 
-1. **Drum Sheet Extractor** – Transcribe drum performances from audio into editable notation.
+1. **Studio (formerly Extractor)** – Import audio via file dialog, transcribe into editable notation, or start a new chart from scratch.
 2. **Interactive Tutoring** – Connect electronic drum kits over MIDI for real-time lessons, feedback, and practice tools.
 
 ## Documentation Index
@@ -53,11 +53,22 @@ Taal/
 
 ## Running Key Components
 
-- **Desktop App:** `cargo run -p taal-desktop` launches the GUI with extractor, tutor, and marketplace placeholders.
+- **Desktop App:** `cargo run -p taal-desktop` launches the GUI with Studio, Tutor, Marketplace, and Settings.
 - **Transcription CLI:** `cargo run -p taal-transcriber -- <path-to-audio>` prints a JSON transcription using the current mock pipeline.
 - **Dataset Tool:** `cargo run -p dataset-pipeline -- <annotations.json>` validates and counts classifier annotations.
 
 Each crate includes targeted unit tests. Execute `cargo test --workspace` for the full suite (requires network access to download dependencies on first run).
+
+## What’s New in the UI
+
+- Studio: file picker for audio, “New Chart”, and “Load Sample”.
+- Basic editing: piece selection, click-to-add notes, right-click delete, selection + drag to move, snap-to-grid, and a waveform backdrop when an audio file is selected.
+- Transport: play/pause, BPM, loop in/out, visible playhead, and a simple metronome click.
+- Settings: MIDI device picker with refresh; audio device dropdown (placeholder if backend is unavailable), exclusive mode toggle, latency and volume sliders; test tone playback; high‑contrast theme toggle; visual MIDI mapping wizard (click a pad then hit your kit) with revert.
+- Tutor: live MIDI input mapped via your kit profile; hits advance session.
+- Tutor: per‑instrument "note highway" lanes (Crash/Ride/Hi‑Hat/Snare/Toms/Kick), moving playhead, and color-coded hit states (green on-time, purple late, yellow early, red missed, blue not-yet-played). Includes Play/Pause, BPM control, optional “Use lesson tempo” (TempoMap), metronome toggle/volume, pre‑roll count‑in, and adjustable hit window. Scoring uses millisecond timing with your current BPM (or lesson tempo).
+
+See also: `docs/UX_OVERVIEW.md` for the short roadmap.
 
 ## What “Transcribe” Does Today
 

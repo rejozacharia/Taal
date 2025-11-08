@@ -101,11 +101,11 @@ Key modules:
 ## Applications & Tools
 
 ### `apps/desktop`
-Primary GUI application bundling the extractor and tutoring experiences.
+Primary GUI application bundling the Studio (extractor) and tutoring experiences.
 
 Structure:
-- `app.rs`: sets up `egui` window, handles top-level state machines between Extractor/Tutor/Marketplace tabs.
-- `extractor_ui`: hosts waveform view, classification lane timeline, notation editor, and export drawer.
+- `app.rs`: sets up `egui` window, handles top-level state machines between Studio/Tutor/Marketplace/Settings tabs.
+- `studio_ui` (formerly extractor): hosts waveform view, classification lane timeline, notation editor, and export drawer.
 - `tutor_ui`: lesson browser, kit visualizer, scoring overlays, session controls.
 - `market_ui`: placeholder for future marketplace integration.
 
@@ -114,7 +114,7 @@ State Management:
 - Background tasks run on `tokio` runtime to execute transcription without blocking the UI.
 
 Implementation snapshot:
-- Desktop app wires Extractor/Tutor/Marketplace tabs to crate APIs.
+- Desktop app wires Studio/Tutor/Marketplace tabs to crate APIs.
 - Error paths avoid non-Send/Sync GUI errors; logging via `tracing`/`tracing-subscriber`.
 
 ### `tools/dataset-pipeline`
@@ -141,6 +141,6 @@ Responsibilities:
 1. `domain` crate exposes tempo maps, drum events, and MusicXML export traits with unit tests.
 2. `audio` crate can stream audio from disk and capture microphone/e-drum input with latency measurement.
 3. `transcriber` crate CLI converts a WAV file into a JSON event list with tempo map.
-4. `apps/desktop` hosts navigation between Extractor and Tutor tabs and shows placeholder content for each.
+4. `apps/desktop` hosts navigation between Studio, Tutor, Marketplace, and Settings tabs and shows content for each.
 
 With this document in place we can begin implementing the workspace according to the `Development Roadmap` in `docs/ARCHITECTURE.md`.

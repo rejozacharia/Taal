@@ -1,4 +1,4 @@
-use egui::{Color32, Pos2, Rect, Response, Sense, Ui};
+use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, Ui};
 use taal_domain::{LessonDescriptor, NotatedEvent};
 
 pub struct NotationEditor {
@@ -14,17 +14,89 @@ impl NotationEditor {
         self.lesson = lesson;
     }
 
+    pub fn lesson(&self) -> &LessonDescriptor {
+        &self.lesson
+    }
+
+    pub fn lesson_mut(&mut self) -> &mut LessonDescriptor {
+        &mut self.lesson
+    }
+
+    pub fn push_event(&mut self, event: NotatedEvent) {
+        self.lesson.notation.push(event);
+    }
+
     pub fn draw(&mut self, ui: &mut Ui) -> Response {
+        self.draw_with_timeline(ui, 0.0, self.estimate_total_beats(), None, None, None)
+    }
+
+    pub fn draw_with_timeline(
+        &mut self,
+        ui: &mut Ui,
+        start_beat: f64,
+        total_beats: f64,
+        waveform: Option<&[f32]>,
+        playhead_beat: Option<f64>,
+        loop_region: Option<(f64, f64)>,
+    ) -> Response {
         let (rect, response) =
-            ui.allocate_at_least(egui::vec2(ui.available_width(), 200.0), Sense::hover());
+            ui.allocate_at_least(egui::vec2(ui.available_width(), 220.0), Sense::click());
         let painter = ui.painter_at(Rect::from_min_size(rect.min, rect.size()));
-        let total_events = self.lesson.notation.len().max(1) as f32;
-        for (index, event) in self.lesson.notation.iter().enumerate() {
-            let x = rect.left() + rect.width() * index as f32 / total_events;
+
+        // Draw background waveform if provided.
+        if let Some(wf) = waveform {
+            let mid = rect.center().y;
+            let half_h = rect.height() * 0.35;
+            let mut points = Vec::with_capacity(wf.len());
+            for (i, s) in wf.iter().enumerate() {
+                let t = i as f32 / (wf.len().max(1) as f32);
+                let x = rect.left() + rect.width() * t;
+                let y = mid - s.clamp(-1.0, 1.0) * half_h;
+                points.push(Pos2 { x, y });
+            }
+            if points.len() >= 2 {
+                painter.add(Shape::line(points, Stroke::new(1.0, Color32::from_gray(120))));
+            }
+        }
+
+        // Draw loop region first (under everything)
+        if let Some((a, b)) = loop_region {
+            let tb = total_beats.max(1.0) as f32;
+            let la = ((a - start_beat) as f32 / tb).clamp(0.0, 1.0);
+            let lb = ((b - start_beat) as f32 / tb).clamp(0.0, 1.0);
+            let x0 = rect.left() + rect.width() * la.min(lb);
+            let x1 = rect.left() + rect.width() * la.max(lb);
+            let r = Rect::from_min_max(Pos2 { x: x0, y: rect.top() }, Pos2 { x: x1, y: rect.bottom() });
+            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(255, 255, 0, 24));
+        }
+
+        // Draw events using beat positions proportional to timeline length.
+        let tb = total_beats.max(1.0) as f32;
+        for ev in &self.lesson.notation {
+            let t = ((ev.event.beat as f32 - start_beat as f32) / tb).clamp(0.0, 1.0);
+            let x = rect.left() + rect.width() * t;
             let y = rect.center().y;
-            painter.circle_filled(Pos2 { x, y }, 6.0, piece_color(event));
+            painter.circle_filled(Pos2 { x, y }, 6.0, piece_color(ev));
+        }
+
+        // Playhead
+        if let Some(ph) = playhead_beat {
+            let t = ((ph as f32 - start_beat as f32) / tb).clamp(0.0, 1.0);
+            let x = rect.left() + rect.width() * t;
+            painter.line_segment(
+                [Pos2 { x, y: rect.top() }, Pos2 { x, y: rect.bottom() }],
+                Stroke::new(2.0, Color32::from_rgb(255, 210, 0)),
+            );
         }
         response
+    }
+
+    fn estimate_total_beats(&self) -> f64 {
+        self.lesson
+            .notation
+            .iter()
+            .map(|e| e.event.beat)
+            .fold(16.0, |acc, b| acc.max(b + 1.0))
     }
 
     pub fn event_count(&self) -> usize {

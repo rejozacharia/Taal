@@ -21,6 +21,32 @@ impl PerformanceReport {
 pub struct ScoringEngine;
 
 impl ScoringEngine {
+    /// Score using a provided seconds-per-beat value (derived from current practice BPM).
+    /// Uses timing thresholds in milliseconds.
+    pub fn score_with_spb(&self, lesson: &LessonDescriptor, hits: &[DrumEvent], seconds_per_beat: f64) -> PerformanceReport {
+        if lesson.notation.is_empty() {
+            return PerformanceReport::empty();
+        }
+        let mut matched = 0usize;
+        let mut early = 0usize;
+        let mut late = 0usize;
+        // simple pairwise comparison for now
+        for (expected, actual) in lesson.notation.iter().zip(hits.iter()) {
+            let delta_beats = actual.beat - expected.event.beat;
+            let delta_ms = (delta_beats * seconds_per_beat * 1000.0).abs();
+            if delta_ms < 50.0 {
+                matched += 1;
+                if delta_beats < 0.0 {
+                    early += 1;
+                } else if delta_beats > 0.0 {
+                    late += 1;
+                }
+            }
+        }
+        let accuracy = matched as f32 / lesson.notation.len() as f32;
+        PerformanceReport { accuracy, early_hits: early, late_hits: late }
+    }
+
     pub fn score(&self, lesson: &LessonDescriptor, hits: &[DrumEvent]) -> PerformanceReport {
         if lesson.notation.is_empty() {
             return PerformanceReport::empty();
