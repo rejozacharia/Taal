@@ -1,0 +1,55 @@
+[workspace]
+members = [
+    "crates/domain",
+    "crates/audio",
+    "crates/transcriber",
+    "crates/notation",
+    "crates/tutor",
+    "crates/services",
+    "apps/desktop",
+    "tools/dataset-pipeline",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+authors = ["Taal Contributors"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+async-trait = "0.1"
+# Audio/MIDI ecosystem
+cpal = { version = "0.15", default-features = false }
+midir = "0.9"
+ringbuf = "0.3"
+symphonia = { version = "0.5", features = ["aac", "flac", "mp3", "vorbis", "wav"] }
+# GUI and rendering
+egui = "0.24"
+eframe = "0.24"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# CLI utilities
+clap = { version = "4", features = ["derive"] }
+
+# Database
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "macros", "sqlite"] }
+
+# Machine learning
+ort = { version = "1", default-features = false, features = ["download-binaries"] }
+
+# Math / DSP utilities
+realfft = "0.12"
+ndarray = { version = "0.15", features = ["serde"] }
+
+# Testing
+approx = "0.5"

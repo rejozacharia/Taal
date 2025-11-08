@@ -1,0 +1,15 @@
+[package]
+name = "taal-domain"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Core domain models for the Taal drum tutoring platform"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+time = "0.3"

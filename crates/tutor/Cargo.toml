@@ -1,0 +1,22 @@
+[package]
+name = "taal-tutor"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Interactive tutoring core for Taal"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+midir.workspace = true
+ringbuf.workspace = true
+
+[dependencies.taal-domain]
+path = "../domain"
+
+[dependencies.taal-audio]
+path = "../audio"

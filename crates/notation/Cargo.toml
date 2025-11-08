@@ -1,0 +1,16 @@
+[package]
+name = "taal-notation"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Notation rendering components for Taal"
+
+[dependencies]
+egui.workspace = true
+serde.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+
+[dependencies.taal-domain]
+path = "../domain"
