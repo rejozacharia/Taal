@@ -10,7 +10,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use time::Duration;
-use taal_domain::{DrumArticulation, DrumEvent, DrumPiece, LessonDescriptor, NotatedEvent, TempoMap};
+use taal_domain::{DrumArticulation, DrumEvent, DrumPiece, LessonDescriptor, NotatedEvent, TempoMap, NotationExporter};
 use taal_notation::NotationEditor;
 use taal_services::MarketplaceClient;
 use taal_transcriber::{TranscriptionJob, TranscriptionPipeline};
@@ -143,6 +143,7 @@ struct ExtractorPane {
     dragging_loop: bool,
     loop_drag_start: f64,
     record_latency_ms: f32,
+    lane_mode: bool,
 }
 
 impl ExtractorPane {
@@ -176,6 +177,7 @@ impl ExtractorPane {
             dragging_loop: false,
             loop_drag_start: 0.0,
             record_latency_ms: 0.0,
+            lane_mode: true,
         }
     }
 
@@ -252,6 +254,65 @@ impl ExtractorPane {
                 self.editor = Some(NotationEditor::new(lesson));
                 self.status_message = Some("Loaded sample transcription".to_string());
             }
+            // Save / Open chart (JSON)
+            if ui.button("Open Chart").on_hover_text("Load a saved chart (.json)").clicked() {
+                if let Some(path) = FileDialog::new().add_filter("Chart", &["json"]).pick_file() {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        match serde_json::from_str::<LessonDescriptor>(&text) {
+                            Ok(lesson) => {
+                                self.editor = Some(NotationEditor::new(lesson));
+                                self.status_message = Some(format!("Loaded chart: {}", path.display()));
+                            }
+                            Err(err) => { self.status_message = Some(format!("Failed to load: {err}")); }
+                        }
+                    }
+                }
+            }
+            if ui.button("Save Chart").on_hover_text("Save current chart to JSON").clicked() {
+                if let Some(editor) = &self.editor {
+                    if let Some(path) = FileDialog::new().set_file_name("chart.json").save_file() {
+                        match serde_json::to_string_pretty(editor.lesson()) {
+                            Ok(s) => { let _ = std::fs::write(&path, s); self.status_message = Some(format!("Saved to {}", path.display())); }
+                            Err(err) => { self.status_message = Some(format!("Failed to save: {err}")); }
+                        }
+                    }
+                } else {
+                    self.status_message = Some("Nothing to save".to_string());
+                }
+            }
+            egui::ComboBox::from_id_source("export_menu")
+                .selected_text("Export…")
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(false, "Export JSON").on_hover_text("Export chart as JSON").clicked() {
+                        if let Some(editor) = &self.editor {
+                            if let Some(path) = FileDialog::new().set_file_name("chart.json").save_file() {
+                                if let Ok(s) = serde_json::to_string_pretty(editor.lesson()) { let _ = std::fs::write(&path, s); }
+                            }
+                        }
+                    }
+                    if ui.selectable_label(false, "Export MIDI").on_hover_text("Standard MIDI File (type 0)").clicked() {
+                        if let Some(editor) = &self.editor {
+                            if let Some(path) = FileDialog::new().set_file_name("chart.mid").save_file() {
+                                let exp = taal_domain::io::MidiExporter;
+                                match exp.export(editor.lesson(), taal_domain::io::ExportFormat::Midi) {
+                                    Ok(bytes) => { let _ = std::fs::write(&path, bytes); }
+                                    Err(err) => { self.status_message = Some(format!("Export failed: {}", err)); }
+                                }
+                            }
+                        }
+                    }
+                    if ui.selectable_label(false, "Export MusicXML").on_hover_text("Simple MusicXML").clicked() {
+                        if let Some(editor) = &self.editor {
+                            if let Some(path) = FileDialog::new().set_file_name("chart.musicxml").save_file() {
+                                let exp = taal_domain::io::SimpleMusicXmlExporter;
+                                match exp.export(editor.lesson(), taal_domain::io::ExportFormat::MusicXml) {
+                                    Ok(bytes) => { let _ = std::fs::write(&path, bytes); }
+                                    Err(err) => { self.status_message = Some(format!("Export failed: {}", err)); }
+                                }
+                            }
+                        }
+                    }
+                });
         });
 
         if let Some(message) = &self.status_message {
@@ -261,7 +322,7 @@ impl ExtractorPane {
         // Creation tools
         ui.collapsing("Editor Tools", |ui| {
             ui.horizontal(|ui| {
-                ui.label("Piece:");
+                ui.label("Piece:").on_hover_text("Select drum piece for new notes");
                 egui::ComboBox::from_id_source("piece_select")
                     .selected_text(format!("{:?}", self.selected_piece))
                     .show_ui(ui, |ui| {
@@ -280,11 +341,11 @@ impl ExtractorPane {
                             ui.selectable_value(&mut self.selected_piece, piece, format!("{:?}", piece));
                         }
                     });
-                ui.label("Velocity:");
+                ui.label("Velocity:").on_hover_text("MIDI velocity (1-127) for new notes");
                 ui.add(egui::Slider::new(&mut self.selected_velocity, 1..=127));
-                ui.label("Grid beats:");
-                ui.add(egui::Slider::new(&mut self.grid_total_beats, 4.0..=64.0).logarithmic(true));
-                ui.label("Snap:");
+                ui.label("Grid beats:").on_hover_text("Total beats in chart timeline");
+                ui.add(egui::Slider::new(&mut self.grid_total_beats, 4.0..=256.0).logarithmic(true));
+                ui.label("Snap:").on_hover_text("Note placement grid resolution");
                 egui::ComboBox::from_id_source("snap_select")
                     .selected_text(format!("1/{}", self.snap_den))
                     .show_ui(ui, |ui| {
@@ -294,18 +355,39 @@ impl ExtractorPane {
                     });
             });
             ui.separator();
+            // Lane controls: basic Solo/Mute UI (placeholder solo uses selected_piece)
+            if self.lane_mode {
+                ui.label("Lane controls (Solo)");
+                let lanes = studio_lanes();
+                ui.horizontal_wrapped(|ui| {
+                    for piece in lanes {
+                        if ui.small_button(format!("S {:?}", piece)).on_hover_text("Solo this lane for audition").clicked() {
+                            self.selected_piece = piece;
+                        }
+                    }
+                });
+            }
+            ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(if self.playing {"Pause"} else {"Play"}).clicked() { self.playing = !self.playing; if self.playing { self.last_tick = Some(std::time::Instant::now()); } }
-                ui.label("BPM"); ui.add(egui::Slider::new(&mut self.bpm, 40.0..=220.0));
-                ui.checkbox(&mut self.loop_enabled, "Loop");
+                if ui.button(if self.playing {"Pause"} else {"Play"}).on_hover_text("Play/Stop chart preview").clicked() { self.playing = !self.playing; if self.playing { self.last_tick = Some(std::time::Instant::now()); self.next_click_beat = self.playhead.ceil(); } }
+                ui.label("BPM").on_hover_text("Preview tempo"); ui.add(egui::Slider::new(&mut self.bpm, 40.0..=220.0));
+                ui.checkbox(&mut self.loop_enabled, "Loop").on_hover_text("Loop between start and end beats");
                 ui.label("Start"); ui.add(egui::DragValue::new(&mut self.loop_start).speed(0.1));
                 ui.label("End"); ui.add(egui::DragValue::new(&mut self.loop_end).speed(0.1));
-                if ui.button("<< Reset").clicked() { self.playhead = 0.0; }
+                if ui.button("<< Reset").on_hover_text("Reset playhead to start").clicked() { self.playhead = 0.0; }
                 ui.separator();
-                ui.checkbox(&mut self.record_enabled, "Record MIDI");
+                ui.checkbox(&mut self.record_enabled, "Record MIDI").on_hover_text("Arm to capture MIDI into chart while playing");
                 ui.separator();
                 ui.checkbox(&mut settings.metronome_enabled, "Metronome");
                 ui.add(egui::Slider::new(&mut settings.metronome_gain, 0.0..=1.0).text("Click vol"));
+                ui.separator();
+                if ui.button("Quantize sel").on_hover_text("Quantize selected note to snap").clicked() { self.quantize_selected(); }
+                if ui.button("Quantize all").on_hover_text("Quantize all notes to snap").clicked() {
+                    // avoid borrow conflict by taking editor mutably after this UI block
+                    self.status_message = Some("__DO_QUANTIZE_ALL__".into());
+                }
+                ui.separator();
+                ui.checkbox(&mut self.lane_mode, "Lane editor").on_hover_text("Compose per instrument in lanes (Snare first)");
             });
         });
 
@@ -313,6 +395,13 @@ impl ExtractorPane {
         let mut recorded: Vec<NotatedEvent> = Vec::new();
         if self.record_enabled { self.sync_midi(settings); self.poll_midi_collect(&mut recorded); }
 
+        if self.status_message.as_deref() == Some("__DO_QUANTIZE_ALL__") {
+            // take editor out briefly to avoid nested borrow
+            let mut tmp = None;
+            std::mem::swap(&mut self.editor, &mut tmp);
+            if let Some(mut ed) = tmp { self.quantize_all(&mut ed); self.editor = Some(ed); }
+            self.status_message = Some("Quantized all".into());
+        }
         if let Some(editor) = &mut self.editor {
             // advance transport
             if self.playing {
@@ -321,6 +410,19 @@ impl ExtractorPane {
                     let dt = now.duration_since(last).as_secs_f64();
                     self.playhead += dt * (self.bpm as f64) / 60.0;
                     if self.loop_enabled && self.playhead >= self.loop_end { self.playhead = self.loop_start; }
+                    // Trigger preview sounds for events crossed since last frame
+                    let prev = self.last_tick.map(|_| self.playhead - dt * (self.bpm as f64) / 60.0).unwrap_or(self.playhead);
+                    let (a, b) = if self.loop_enabled && prev > self.playhead { (prev, self.loop_end) } else { (prev, self.playhead) };
+                    let mut fired = 0usize;
+                    for ev in editor.lesson().notation.iter() {
+                        if ev.event.beat > a && ev.event.beat <= b {
+                            fired += 1;
+                            settings.play_drum(ev.event.piece, ev.event.velocity, 80, settings.main_volume * 0.8);
+                        }
+                    }
+                    if self.loop_enabled && prev > self.playhead {
+                        for ev in editor.lesson().notation.iter() { if ev.event.beat > self.loop_start && ev.event.beat <= self.playhead { settings.play_drum(ev.event.piece, ev.event.velocity, 80, settings.main_volume * 0.8); } }
+                    }
                 }
                 self.last_tick = Some(now);
                 // Metronome clicks at integer beats
@@ -336,7 +438,11 @@ impl ExtractorPane {
             }
 
             // Zoom/pan/loop interactions
-            let mut response = editor.draw_with_timeline(ui, self.view_start, self.view_span, self.waveform.as_deref(), Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None });
+            let mut response = if self.lane_mode {
+                draw_studio_lanes(ui, editor.lesson(), self.view_start, self.view_span, Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None })
+            } else {
+                editor.draw_with_timeline(ui, self.view_start, self.view_span, self.waveform.as_deref(), Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None })
+            };
             // Mouse wheel to zoom
             let scroll = ui.input(|i| i.scroll_delta.y);
             if response.hovered() && scroll.abs() > 0.0 {
@@ -373,29 +479,43 @@ impl ExtractorPane {
             // Apply recorded events (if any)
             for ev in recorded { editor.push_event(ev); }
 
+            // Draw timing axis (beats + bars) aligned with content
+            let (left, right) = if self.lane_mode {
+                (response.rect.left() + 90.0, response.rect.right() - 8.0)
+            } else {
+                (response.rect.left(), response.rect.right())
+            };
+            draw_studio_axis_with_bounds(ui, response.rect, self.view_start, self.view_span, editor.lesson(), left, right);
+
             // Click to add/select/drag note
             if let Some(pos) = response.interact_pointer_pos() {
+                // In lane mode, ignore clicks outside the lane band to avoid confusing sticky selection
+                let lane_ok = if self.lane_mode { piece_from_lane_click(pos, response.rect).is_some() } else { true };
+                if !lane_ok { /* ignore click outside lanes */ } else {
                 let rect = response.rect;
                 let t = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-                let mut beat = (t as f64) * self.grid_total_beats;
+                let mut beat = (t as f64) * self.view_span + self.view_start;
                 // Snap to grid based on selection.
                 let step = 4.0_f64 / (self.snap_den as f64); // beats per snap tick
                 beat = (beat / step).round() * step;
 
                 // Right-click deletes nearest event (by beat) of same piece within threshold.
                 if response.clicked_by(egui::PointerButton::Secondary) {
-                    let idx = nearest_event_index(editor, beat, Some(self.selected_piece));
+                    let del_piece = if self.lane_mode { piece_from_lane_click(pos, response.rect) } else { Some(self.selected_piece) };
+                    let idx = nearest_event_index(editor, beat, del_piece);
                     if let Some(i) = idx { editor.lesson_mut().notation.remove(i); self.selected_event = None; }
                 }
 
-                // Left-click: select if near existing, else add
+                // Left-click: select if near existing (in lane when lane_mode), else add
                 if response.clicked_by(egui::PointerButton::Primary) {
-                    if let Some(i) = nearest_event_index(editor, beat, None) { if (editor.lesson().notation[i].event.beat - beat).abs() <= 0.3 { self.selected_event = Some(i); } else { self.selected_event = None; } }
+                    let sel_piece = if self.lane_mode { piece_from_lane_click(pos, response.rect) } else { None };
+                    if let Some(i) = nearest_event_index(editor, beat, sel_piece) { if (editor.lesson().notation[i].event.beat - beat).abs() <= 0.3 { self.selected_event = Some(i); } else { self.selected_event = None; } }
                     if self.selected_event.is_none() {
+                        let piece = if self.lane_mode { piece_from_lane_click(pos, response.rect).unwrap_or(self.selected_piece) } else { self.selected_piece };
                         editor.push_event(NotatedEvent::new(
                             DrumEvent::new(
                                 beat,
-                                self.selected_piece,
+                                piece,
                                 self.selected_velocity,
                                 DrumArticulation::Normal,
                             ),
@@ -407,6 +527,7 @@ impl ExtractorPane {
                 // Drag to move selected
                 if response.dragged() {
                     if let Some(sel) = self.selected_event { if let Some(ev) = editor.lesson_mut().notation.get_mut(sel) { ev.event.beat = beat; } }
+                }
                 }
             }
             // Keyboard delete
@@ -440,6 +561,22 @@ impl ExtractorPane {
                     out.push(NotatedEvent::new(DrumEvent::new(beat, piece, vel, DrumArticulation::Normal), Duration::milliseconds(500)));
                 }
             }
+        }
+    }
+
+    fn quantize_selected(&mut self) {
+        if let Some(editor) = &mut self.editor {
+            if let Some(sel) = self.selected_event { if let Some(ev) = editor.lesson_mut().notation.get_mut(sel) {
+                let step = 4.0_f64 / (self.snap_den as f64);
+                ev.event.beat = (ev.event.beat / step).round() * step;
+            }}
+        }
+    }
+
+    fn quantize_all(&mut self, editor: &mut NotationEditor) {
+        let step = 4.0_f64 / (self.snap_den as f64);
+        for ev in &mut editor.lesson_mut().notation {
+            ev.event.beat = (ev.event.beat / step).round() * step;
         }
     }
 
@@ -909,6 +1046,119 @@ fn legend_dot(ui: &mut Ui, color: egui::Color32, label: &str) {
     ui.label(label);
 }
 
+fn draw_studio_axis_with_bounds(ui: &mut Ui, rect: egui::Rect, start: f64, span: f64, lesson: &LessonDescriptor, left: f32, right: f32) {
+    let painter = ui.painter_at(rect);
+    let sig = lesson.default_tempo.time_signature_at(0.0);
+    let denom = sig.1.max(1) as f64;
+    let beats_per_bar = sig.0.max(1) as f64 * (4.0 / denom);
+    let end = start + span;
+    let to_x = |beat: f64| left + (right - left) * ((beat - start) / span).clamp(0.0, 1.0) as f32;
+    let mut b = start.floor();
+    let mut measure_idx = (start / beats_per_bar).floor() as i64 + 1;
+    while b <= end {
+        let x = to_x(b);
+        let strong = ((b / beats_per_bar).fract()) < 1e-6;
+        let col = if strong { egui::Color32::from_gray(100) } else { egui::Color32::from_gray(60) };
+        let w = if strong { 2.0 } else { 1.0 };
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(w, col));
+        if strong {
+            painter.text(egui::pos2(x + 2.0, rect.top() - 2.0), egui::Align2::LEFT_BOTTOM, format!("{}", measure_idx), egui::TextStyle::Small.resolve(ui.style()), egui::Color32::from_gray(140));
+            measure_idx += 1;
+        }
+        b += 1.0;
+    }
+}
+
+fn studio_lanes() -> Vec<DrumPiece> {
+    // Snare first, then others
+    use DrumPiece::*;
+    vec![Snare, Bass, HiHatClosed, HiHatOpen, HighTom, LowTom, FloorTom, Ride, Crash]
+}
+
+fn lane_color(piece: DrumPiece) -> egui::Color32 {
+    match piece {
+        DrumPiece::Snare => egui::Color32::from_rgb(70, 130, 255),     // vivid blue
+        DrumPiece::Bass => egui::Color32::from_rgb(230, 70, 70),        // red
+        DrumPiece::HiHatClosed => egui::Color32::from_rgb(245, 215, 80),// yellow
+        DrumPiece::HiHatOpen => egui::Color32::from_rgb(255, 165, 60),  // orange
+        DrumPiece::HighTom => egui::Color32::from_rgb(80, 220, 220),    // cyan
+        DrumPiece::LowTom => egui::Color32::from_rgb(60, 200, 140),     // green
+        DrumPiece::FloorTom => egui::Color32::from_rgb(150, 120, 230),  // purple
+        DrumPiece::Ride => egui::Color32::from_rgb(130, 200, 255),      // light sky
+        DrumPiece::Crash => egui::Color32::from_rgb(255, 160, 160),     // salmon
+        DrumPiece::CrossStick => egui::Color32::from_rgb(200, 160, 120),// tan
+        _ => egui::Color32::from_gray(180),
+    }
+}
+
+fn draw_studio_lanes(
+    ui: &mut Ui,
+    lesson: &LessonDescriptor,
+    start_beat: f64,
+    span_beats: f64,
+    playhead: Option<f64>,
+    loop_region: Option<(f64, f64)>,
+) -> egui::Response {
+    let lanes = studio_lanes();
+    let lane_h = 26.0f32;
+    let margin = 8.0f32;
+    let height = lanes.len() as f32 * lane_h + margin * 2.0;
+    let (rect, response) = ui.allocate_at_least(egui::vec2(ui.available_width(), height), egui::Sense::click_and_drag());
+    let painter = ui.painter_at(rect);
+    let left = rect.left() + 90.0;
+    let right = rect.right() - 8.0;
+    let top = rect.top() + margin;
+
+    // lane backgrounds and labels
+    for (row, piece) in lanes.iter().enumerate() {
+        let lane_top = top + row as f32 * lane_h;
+        let bg = if row % 2 == 0 { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 6) } else { egui::Color32::TRANSPARENT };
+        painter.rect_filled(egui::Rect::from_min_size(egui::pos2(left, lane_top), egui::vec2(right - left, lane_h)), 0.0, bg);
+        let y = lane_top + lane_h * 0.5;
+        painter.text(egui::pos2(rect.left() + 6.0, y), egui::Align2::LEFT_CENTER, format!("{:?}", piece), egui::TextStyle::Body.resolve(ui.style()), egui::Color32::LIGHT_GRAY);
+    }
+
+    // loop highlight
+    if let Some((a, b)) = loop_region {
+        let x0 = left + (right - left) * ((a - start_beat) / span_beats).clamp(0.0, 1.0) as f32;
+        let x1 = left + (right - left) * ((b - start_beat) / span_beats).clamp(0.0, 1.0) as f32;
+        painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x0, top), egui::pos2(x1, rect.bottom())), 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 0, 24));
+    }
+
+    // notes
+    for ev in &lesson.notation {
+        let t = ((ev.event.beat - start_beat) / span_beats).clamp(0.0, 1.0) as f32;
+        let x = left + (right - left) * t;
+        if let Some(row) = lanes.iter().position(|p| *p == ev.event.piece) {
+            let y = top + row as f32 * lane_h + lane_h * 0.5;
+            painter.circle_filled(egui::pos2(x, y), 6.0, lane_color(ev.event.piece));
+        }
+    }
+
+    // playhead
+    if let Some(ph) = playhead {
+        let t = ((ph - start_beat) / span_beats).clamp(0.0, 1.0) as f32;
+        let x = left + (right - left) * t;
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 210, 0)));
+    }
+
+    response
+}
+
+fn piece_from_lane_click(pos: egui::Pos2, rect: egui::Rect) -> Option<DrumPiece> {
+    // Match bounds used by draw_studio_lanes
+    let lanes = studio_lanes();
+    let lane_h = 26.0f32;
+    let margin = 8.0f32;
+    let left = rect.left() + 90.0;
+    let right = rect.right() - 8.0;
+    let top = rect.top() + margin;
+    if pos.x < left || pos.x > right { return None; }
+    let row = ((pos.y - top) / lane_h).floor() as isize;
+    if row < 0 { return None; }
+    lanes.get(row as usize).cloned()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum HitLabel { OnTime, Late, Early, Missed }
 
@@ -1250,6 +1500,57 @@ impl SettingsPane {
                 for frame in data.chunks_mut(cfg.channels() as usize) {
                     let s = if written < total_samples { (2.0*std::f32::consts::PI*freq_hz*t/sample_rate).sin() * (0.5*gain).clamp(0.0, 1.0) } else { 0.0 };
                     for ch in frame { *ch = s; }
+                    written = written.saturating_add(1);
+                    t += 1.0;
+                }
+            }, |_| {}, None),
+            _ => return,
+        };
+        if let Ok(stream) = result {
+            let _ = stream.play();
+            self.test_stream = Some(stream);
+            self.test_end = Some(Instant::now() + std::time::Duration::from_millis(dur_ms + 50));
+        }
+    }
+
+    // Simple synthesized drum voices per piece
+    fn play_drum(&mut self, piece: DrumPiece, vel: u8, dur_ms: u64, base_gain: f32) {
+        use cpal::traits::{DeviceTrait, StreamTrait};
+        let device = match find_output_device_by_name(self.selected_audio.and_then(|i| self.audio_devices.get(i)).map(|s| s.as_str())) { Some(d) => d, None => return };
+        let cfg = match device.default_output_config() { Ok(c) => c, Err(_) => return };
+        let sr = cfg.sample_rate().0 as f32;
+        let mut t: f32 = 0.0;
+        let total_samples = (dur_ms as f32 * sr / 1000.0) as usize;
+        let mut written: usize = 0;
+        let gain = (base_gain * (vel as f32 / 127.0)).clamp(0.0, 1.0);
+        // voice params
+        let (kind, freq) = match piece {
+            DrumPiece::Bass => (0, 55.0),
+            DrumPiece::Snare | DrumPiece::CrossStick => (1, 220.0),
+            DrumPiece::HiHatClosed => (1, 8000.0),
+            DrumPiece::HiHatOpen => (1, 6000.0),
+            DrumPiece::HighTom => (0, 180.0),
+            DrumPiece::LowTom => (0, 140.0),
+            DrumPiece::FloorTom => (0, 110.0),
+            DrumPiece::Ride => (1, 4500.0),
+            DrumPiece::Crash => (1, 5000.0),
+            _ => (0, 220.0),
+        };
+        let result = match cfg.sample_format() {
+            cpal::SampleFormat::F32 => device.build_output_stream(&cfg.config(), move |data: &mut [f32], _| {
+                let mut rng = 0x12345678u32;
+                for frame in data.chunks_mut(cfg.channels() as usize) {
+                    let env = ((total_samples.saturating_sub(written)) as f32 / total_samples as f32).powf(2.0);
+                    let sample = if kind == 0 {
+                        // Sine with exponential decay
+                        ((2.0*std::f32::consts::PI*freq*t/sr).sin()) * env * gain
+                    } else {
+                        // Simple noise burst
+                        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                        let n = ((rng as f32 / u32::MAX as f32) * 2.0 - 1.0) * env * gain;
+                        n
+                    };
+                    for ch in frame { *ch = sample; }
                     written = written.saturating_add(1);
                     t += 1.0;
                 }

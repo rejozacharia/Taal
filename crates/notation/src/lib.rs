@@ -88,6 +88,26 @@ impl NotationEditor {
                 Stroke::new(2.0, Color32::from_rgb(255, 210, 0)),
             );
         }
+
+        // Grid: major/minor beat markers (assuming 4/4 from tempo map for now)
+        let sig = self.lesson.default_tempo.time_signature_at(0.0);
+        let denom = sig.1.max(1) as f32;
+        let beats_per_bar = sig.0.max(1) as f32 * (4.0 / denom);
+        let start = start_beat as f32;
+        let end = start + tb;
+        let mut b = start.floor();
+        while b <= end {
+            let t = ((b - start) / tb).clamp(0.0, 1.0);
+            let x = rect.left() + rect.width() * t;
+            let strong = (((b - start_beat as f32) / beats_per_bar).fract()).abs() < 1e-6;
+            let col = if strong { Color32::from_gray(100) } else { Color32::from_gray(60) };
+            let w = if strong { 2.0 } else { 1.0 };
+            painter.line_segment(
+                [Pos2 { x, y: rect.top() }, Pos2 { x, y: rect.bottom() }],
+                Stroke::new(w, col),
+            );
+            b += 1.0;
+        }
         response
     }
 
