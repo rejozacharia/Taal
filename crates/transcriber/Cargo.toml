@@ -1,0 +1,23 @@
+[package]
+name = "taal-transcriber"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Audio to drum notation transcription pipeline"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+clap.workspace = true
+tokio.workspace = true
+ndarray.workspace = true
+ringbuf.workspace = true
+
+[dependencies.taal-domain]
+path = "../domain"
+
+[dependencies.taal-audio]
+path = "../audio"

@@ -1,0 +1,35 @@
+[package]
+name = "taal-desktop"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Desktop application for the Taal drum tutoring platform"
+
+[dependencies]
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dependencies.taal-domain]
+path = "../../crates/domain"
+
+[dependencies.taal-audio]
+path = "../../crates/audio"
+
+[dependencies.taal-notation]
+path = "../../crates/notation"
+
+[dependencies.taal-transcriber]
+path = "../../crates/transcriber"
+
+[dependencies.taal-tutor]
+path = "../../crates/tutor"
+
+[dependencies.taal-services]
+path = "../../crates/services"

@@ -1,0 +1,19 @@
+[package]
+name = "taal-audio"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Audio utilities for Taal"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+cpal.workspace = true
+ringbuf.workspace = true
+symphonia.workspace = true
+realfft.workspace = true
+ndarray.workspace = true
+serde.workspace = true
+tracing.workspace = true
