@@ -115,7 +115,7 @@ impl TempoMap {
 
     pub fn duration_between_beats(&self, start_beat: f64, end_beat: f64) -> Duration {
         let mut seconds = 0.0;
-        let mut current = self.events[0];
+        let current = self.events[0];
         let mut beat_cursor = start_beat;
         while beat_cursor < end_beat {
             let seconds_per_beat = current.seconds_per_beat();

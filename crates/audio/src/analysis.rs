@@ -23,7 +23,7 @@ impl DrumClassifier for MockClassifier {
         let label = if mean > 0.5 { "snare" } else { "kick" };
         Ok(ClassifierOutput {
             label: label.to_string(),
-            confidence: mean.clamp(0.0, 1.0) as f32,
+            confidence: mean.clamp(0.0, 1.0),
         })
     }
 }

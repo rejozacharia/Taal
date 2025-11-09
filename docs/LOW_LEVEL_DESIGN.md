@@ -94,6 +94,92 @@ Threading model:
 - MIDI input callback threads publish events to `session` via lock-free queues.
 - Main update loop (owned by the desktop app) polls `session` at frame rate and renders feedback.
 
+#### Practice UI — Low‑Level Design
+
+Terminology:
+- Use “Chart” for notated material (keeps Studio/Tutor consistent). Supported inputs: MusicXML, MIDI, and Taal JSON.
+
+User flow (Practice mode):
+1. Import Chart: load MusicXML/MIDI/Taal JSON into `domain::events`, build tempo map, and derive an expectation timeline.
+2. Configure: select device, map pads/zones, set loop range (default: full sheet) and loop count (default: 2), set tempo scaling (e.g., 70–100%) and click/backing levels.
+3. Ready + Countdown: user hits “Ready”; UI shows a preroll count‑in (default 1 bar) with click + visual metronome.
+4. Playback + Perform: expectation timeline advances; user plays on e‑drums; MIDI hits are captured and classified in real‑time.
+5. Live Feedback: per‑note judgment (Early/On‑Time/Late/Missed/Extra) rendered on staff/scrolling lane and kit visualizer.
+6. Looping: on reaching loop end, auto‑rewind and play again until loop count is exhausted; stop after final loop.
+7. Review: summary score, timing histogram, per‑measure accuracy; user can save, retry, or adjust loop/tempo.
+
+Core components:
+- `tutor::midi`
+  - Device enumeration/selection via `midir`.
+  - Pad mapping: note/CC to `domain::events::Instrument` (snare, kick, hats open/closed via CC4 threshold, toms, ride, crash, etc.).
+  - Latency calibration: tap‑test or loopback; persist per‑device `latency_ms` and optional per‑pad offsets.
+- `tutor::session`
+  - State machine manages Practice lifecycle and loop control.
+  - Ticker integrates tempo map and wall‑clock to produce current playhead position.
+  - Emits UI events: countdown ticks, measure changes, judgment updates, end‑of‑loop.
+- `tutor::scoring`
+  - Matcher aligns incoming MIDI hits to expected onsets using tempo‑aware tolerance windows.
+  - Produces `Judgment` with signed timing error (ms), velocity, and matched instrument.
+  - Accumulators compute accuracy, streaks, timing distribution, per‑instrument stats.
+- `notation::render`
+  - Renders staff/scrolling lane with highlight of the current beat and judgment overlays.
+  - Loop range visualization and ghosted next notes for anticipation.
+
+State machine (Practice):
+- States: `Idle` → `Loading` → `Calibrating?` → `Ready` → `Countdown` → `Playing` (with `Looping`) → `Stopped` → `Review`.
+- Events: `ImportSheet`, `MapPads`, `SetLoop`, `SetTempoScale`, `PressReady`, `Tick`, `MidiHit`, `LoopEnd`, `Pause`, `Stop`, `Exit`.
+- Transitions:
+  - `Ready --PressReady--> Countdown` (initialize preroll, reset accumulators).
+  - `Countdown --Tick (0)--> Playing` (start playhead at loop start).
+- `Playing --LoopEnd (n < loop_count)--> Countdown|Playing` (configurable: count‑in only on first loop or every loop; default: first only).
+  - `Playing --LoopEnd (n == loop_count)--> Stopped --> Review`.
+
+Timing and judgment model:
+- Latency compensation: `t_adjusted = t_midi - latency_device - latency_global`.
+- Expectation windows derive from local tempo: `beat_ms = 60_000 / bpm_here`.
+  - Match window (configurable): default ±12.5% of beat (cap at ±75 ms).
+  - Center zone (On‑Time, configurable): default ±7.5% of beat (cap at ±40 ms).
+  - Outside match window → `Missed` (if expected had no match) or `Extra` (if incoming cannot map to any expectation).
+- One‑to‑one matching: each expected note matches at most one incoming hit; greedy by absolute error, then by velocity proximity.
+- Chords/polyphony: expectations at identical timestamps require per‑instrument matching; handle hi‑hat openness via CC4 snapshot near the hit.
+- Dynamics: optional grading band (pp–ff) from expected velocity; mismatches recorded but do not fail a match.
+
+- Settings: timing windows are user‑configurable in `Settings > Practice` and persisted per machine.
+
+Modes:
+- Free Play: infinite looping by default, no “Missed” penalties, continuous real‑time feedback only.
+- Test: single pass (A/B region or full chart), show Review summary at end; no looping.
+
+Real‑time feedback rendering:
+- Per‑note halo color: Early (blue), On‑Time (green), Late (orange), Missed (red), Extra (purple).
+- Small timing “needle” drawn perpendicular to note stem proportional to error (clamped to ±75 ms).
+- Last‑N judgments summary widget and per‑drum mini meters.
+
+Looping behavior:
+- Defaults: loop range = full chart; loop count = 2; countdown only on first loop; stop after final loop.
+- A/B loop: optional region [A,B] set from UI; used as loop/playback range instead of full chart.
+- Options: “infinite loop”, “countdown every loop”, “auto‑advance selection to next phrase”.
+
+Scoring summary (Review screen):
+1. Overall: accuracy %, average abs timing error, early/late bias, streak max.
+2. Per‑measure heatmap and list of tough bars.
+3. Per‑instrument accuracy and timing stats.
+4. Save result to history with device/latency snapshot; export CSV/JSON.
+
+Data structures (sketch):
+- `Expectation { t_ms, instrument, velocity_hint, measure_idx, is_ghost }`
+- `MidiHit { t_ms, note, cc4, velocity }`
+- `Judgment { expected_idx?, hit_idx?, category, error_ms?, velocity, instrument }`
+- `PracticeConfig { loop_start, loop_end, loop_count, tempo_scale, countdown_bars }`
+- `PracticeResult { judgments: Vec<Judgment>, aggregates, started_at, device_id }`
+
+Sequence (text diagram):
+1. UI: Import → `session.load(sheet)` → build expectations.
+2. User: Ready → `session.start_countdown()` → preroll ticks.
+3. Audio/MIDI: `midir` callback → queue `MidiHit` → `scoring.match()` → emit `Judgment`.
+4. Ticker: advances playhead → UI renders cursor and expectations.
+5. End of loop: either restart (decrement remaining) or stop and compute `PracticeResult` → Review.
+
 ### `crates/services`
 Purpose: Optional networking and marketplace integration.
 

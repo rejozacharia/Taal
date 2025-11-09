@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 
 use taal_audio::io::AudioDecoder;
-use taal_domain::{LessonDescriptor, NotatedEvent, TempoMap};
+use taal_domain::{LessonDescriptor, NotatedEvent};
 
 use crate::notation::SimpleQuantizer;
 use crate::tempo::TempoEstimator;
@@ -22,8 +22,8 @@ pub struct TranscriptionPipeline {
 impl TranscriptionPipeline {
     pub fn new() -> Self {
         Self {
-            tempo: TempoEstimator::default(),
-            quantizer: SimpleQuantizer::default(),
+            tempo: TempoEstimator,
+            quantizer: SimpleQuantizer,
         }
     }
 

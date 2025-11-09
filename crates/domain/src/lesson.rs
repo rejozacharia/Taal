@@ -27,6 +27,12 @@ impl PracticeStatistics {
     }
 }
 
+impl Default for PracticeStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LessonDescriptor {
     pub id: String,

@@ -21,7 +21,6 @@ use tracing_subscriber::EnvFilter;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver};
 use midir::{MidiInput, MidiInputConnection};
-use dirs;
 use std::time::Instant;
 
 fn main() -> anyhow::Result<()> {
@@ -70,7 +69,7 @@ impl eframe::App for DesktopApp {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, ActiveTab::Extractor, "Studio");
-                ui.selectable_value(&mut self.active_tab, ActiveTab::Tutor, "Tutor");
+                ui.selectable_value(&mut self.active_tab, ActiveTab::Tutor, "Practice");
                 ui.selectable_value(&mut self.active_tab, ActiveTab::Marketplace, "Marketplace");
                 ui.selectable_value(&mut self.active_tab, ActiveTab::Settings, "Settings");
             });
@@ -508,7 +507,7 @@ impl ExtractorPane {
             }
 
             // Zoom/pan/loop interactions
-            let mut response = if self.lane_mode {
+            let response = if self.lane_mode {
                 draw_studio_lanes(ui, editor.lesson(), self.view_start, self.view_span, Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None }, &self.lane_solo, &self.lane_mute)
             } else {
                 editor.draw_with_timeline(ui, self.view_start, self.view_span, self.waveform.as_deref(), Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None })
@@ -521,7 +520,7 @@ impl ExtractorPane {
             }
             // Middle button drag to pan
             if response.dragged_by(egui::PointerButton::Middle) {
-                if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(_pos) = response.interact_pointer_pos() {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     let beats_per_px = self.view_span / response.rect.width() as f64;
                     self.view_start = (self.view_start - dx as f64 * beats_per_px).clamp(0.0, self.grid_total_beats - self.view_span);
@@ -933,9 +932,7 @@ struct TutorPane {
     last_tick: Option<std::time::Instant>,
     // hit window (ms)
     hit_window_ms: f64,
-    // metronome
-    metronome_enabled: bool,
-    metronome_gain: f32,
+    // metronome click tracking
     next_click_beat: f64,
     // pre-roll
     pre_roll_beats: u8,
@@ -946,6 +943,23 @@ struct TutorPane {
     // freeze playhead vs scroll notes
     freeze_playhead: bool,
     statuses: Vec<Option<HitLabel>>,
+    // Practice settings cached from Settings
+    practice_match_window_pct: f32,
+    practice_on_time_pct: f32,
+    practice_match_cap_ms: f32,
+    practice_on_time_cap_ms: f32,
+    countdown_each_loop: bool,
+    loop_total: u8,
+    loops_done: u8,
+    end_beat: f64,
+    tempo_scale_default: f32,
+    mode: PracticeUIMode,
+    // A/B loop region
+    loop_use_region: bool,
+    loop_a: f64,
+    loop_b: f64,
+    // Review
+    review_active: bool,
 }
 
 impl TutorPane {
@@ -965,8 +979,6 @@ impl TutorPane {
             playhead: 0.0,
             last_tick: None,
             hit_window_ms: 75.0,
-            metronome_enabled: true,
-            metronome_gain: 0.7,
             next_click_beat: 0.0,
             pre_roll_beats: 4,
             pre_roll_active: false,
@@ -974,6 +986,20 @@ impl TutorPane {
             elapsed_secs: 0.0,
             freeze_playhead: false,
             statuses: Vec::new(),
+            practice_match_window_pct: 12.5,
+            practice_on_time_pct: 7.5,
+            practice_match_cap_ms: 75.0,
+            practice_on_time_cap_ms: 40.0,
+            countdown_each_loop: false,
+            loop_total: 2,
+            loops_done: 0,
+            end_beat: 0.0,
+            tempo_scale_default: 0.8,
+            mode: PracticeUIMode::FreePlay,
+            loop_use_region: false,
+            loop_a: 0.0,
+            loop_b: 0.0,
+            review_active: false,
         }
     }
 
@@ -988,13 +1014,31 @@ impl TutorPane {
             .as_ref()
             .map(|s| vec![None; s.lesson.notation.len()])
             .unwrap_or_default();
+        // Compute end beat as the last expected note (fallback to 0.0)
+        self.end_beat = self.session.as_ref()
+            .and_then(|s| s.lesson.notation.iter().map(|e| e.event.beat).reduce(f64::max))
+            .unwrap_or(0.0);
+        self.loops_done = 0;
+        self.review_active = false;
     }
 
     fn ui(&mut self, ui: &mut Ui, settings: &mut SettingsPane) {
-        ui.heading("Tutor Mode");
+        ui.heading("Practice");
         // Selected MIDI device is configured in Settings
         self.poll_midi();
+        // Deferred actions across UI sections to avoid double-borrows
+        let mut do_open_chart = false;
+        let mut do_import_xml = false;
+        let mut do_close_chart = false;
+
         if let Some(session) = &mut self.session {
+            // Mode selector
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.selectable_value(&mut self.mode, PracticeUIMode::FreePlay, "Free Play");
+                ui.selectable_value(&mut self.mode, PracticeUIMode::Test, "Test");
+            });
+            ui.add_space(4.0);
             // Transport + options
             ui.horizontal(|ui| {
                 if ui.button(if self.playing {"Pause"} else {"Play"}).clicked() {
@@ -1005,20 +1049,26 @@ impl TutorPane {
                         self.pre_roll_beats = settings.tutor_pre_roll_beats;
                         self.pre_roll_remaining = self.pre_roll_beats as f64;
                         self.next_click_beat = 0.0;
+                        self.loops_done = 0;
+                        self.loop_total = match self.mode { PracticeUIMode::FreePlay => u8::MAX, PracticeUIMode::Test => 1 };
+                        // Jump to loop start if region enabled
+                        if self.loop_use_region {
+                            self.playhead = self.loop_a.min(self.loop_b);
+                            self.elapsed_secs = 0.0;
+                        }
+                        self.review_active = false;
                     }
                 }
                 // Use lesson tempo toggle
                 let r_use = ui.checkbox(&mut settings.tutor_use_lesson_tempo, "Use lesson tempo");
                 if r_use.changed() { settings.mark_dirty(); }
-                let mut target_bpm = self.bpm;
                 if settings.tutor_use_lesson_tempo {
-                    target_bpm = session.lesson.default_tempo.events()[0].bpm;
-                    self.bpm = target_bpm;
+                    self.bpm = session.lesson.default_tempo.events()[0].bpm;
                 }
                 ui.label("BPM");
                 let r_bpm = ui.add_enabled(!settings.tutor_use_lesson_tempo, egui::Slider::new(&mut self.bpm, 40.0..=240.0));
                 if r_bpm.changed() { settings.mark_dirty(); }
-                if ui.button("Reset").clicked() { self.playhead = 0.0; }
+                if ui.button("Reset").clicked() { self.playhead = 0.0; self.loops_done = 0; }
                 ui.separator();
                 let r_m = ui.checkbox(&mut settings.metronome_enabled, "Metronome");
                 if r_m.changed() { settings.mark_dirty(); }
@@ -1035,20 +1085,38 @@ impl TutorPane {
                 ui.checkbox(&mut self.freeze_playhead, "Freeze playhead (scroll notes)");
             });
 
+            // A/B loop controls
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.loop_use_region, "Loop region (A/B)");
+                ui.label("A:"); ui.add(egui::DragValue::new(&mut self.loop_a).speed(0.1));
+                if ui.button("Set A here").clicked() { self.loop_a = self.playhead; }
+                ui.label("B:"); ui.add(egui::DragValue::new(&mut self.loop_b).speed(0.1));
+                if ui.button("Set B here").clicked() { self.loop_b = self.playhead; }
+                if self.loop_use_region && self.loop_b < self.loop_a { std::mem::swap(&mut self.loop_a, &mut self.loop_b); }
+            });
+
+            // Defer chart actions to avoid double-borrow of self within this scope
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                if ui.button("Open Chart").clicked() { do_open_chart = true; }
+                if ui.button("Import MusicXML").clicked() { do_import_xml = true; }
+                if ui.button("Close Chart").clicked() { do_close_chart = true; }
+            });
+
             // Advance playhead
             if self.playing {
                 let now = std::time::Instant::now();
                 if let Some(last) = self.last_tick {
                     let dt = now.duration_since(last).as_secs_f64();
                     // compute beats advanced based on source (lesson tempo or fixed bpm)
-                    let beats_advanced;
-                    if settings.tutor_use_lesson_tempo {
+                    let beats_advanced = if settings.tutor_use_lesson_tempo {
                         // approximate using instantaneous bpm at current elapsed time
                         let bpm_now = session.lesson.default_tempo.bpm_at(self.elapsed_secs);
-                        beats_advanced = dt * (bpm_now as f64) / 60.0;
+                        dt * (bpm_now as f64) / 60.0
                     } else {
-                        beats_advanced = dt * (self.bpm as f64) / 60.0;
-                    }
+                        dt * (self.bpm as f64) / 60.0
+                    };
                     if self.pre_roll_active {
                         if settings.metronome_enabled && settings.app_sounds {
                             while self.next_click_beat < self.pre_roll_remaining {
@@ -1071,11 +1139,48 @@ impl TutorPane {
                                 self.next_click_beat += 1.0;
                             }
                         }
-                        let beat_window = (settings.tutor_hit_window_ms / 1000.0) * (self.bpm as f64) / 60.0;
+                        // Compute match window (beats) using % of beat with ms cap
+                        let bpm_used = if settings.tutor_use_lesson_tempo { session.lesson.default_tempo.bpm_at(self.elapsed_secs) } else { self.bpm } as f64;
+                        let pct_beats = (self.practice_match_window_pct as f64) / 100.0; // e.g., 0.125 beats at 12.5%
+                        let cap_beats = (self.practice_match_cap_ms as f64 / 1000.0) * (bpm_used) / 60.0;
+                        let beat_window = pct_beats.min(cap_beats);
                         let head = self.playhead;
-                        for (i, ev) in session.lesson.notation.iter().enumerate() {
-                            if self.statuses.get(i).copied().flatten().is_none() && ev.event.beat + beat_window < head {
-                                if let Some(s) = self.statuses.get_mut(i) { *s = Some(HitLabel::Missed); }
+                        if self.mode != PracticeUIMode::FreePlay {
+                            for (i, ev) in session.lesson.notation.iter().enumerate() {
+                                if self.statuses.get(i).copied().flatten().is_none() && ev.event.beat + beat_window < head {
+                                    if let Some(s) = self.statuses.get_mut(i) { *s = Some(HitLabel::Missed); }
+                                }
+                            }
+                        }
+                        // Determine end boundary (A/B region or full chart)
+                        let end_boundary = if self.loop_use_region { self.loop_b.max(self.loop_a) } else { self.end_beat };
+                        // Looping logic at end of boundary
+                        if self.playhead >= end_boundary {
+                            self.loops_done = self.loops_done.saturating_add(1);
+                            if self.loops_done < self.loop_total {
+                                self.playhead = if self.loop_use_region { self.loop_a.min(self.loop_b) } else { 0.0 };
+                                self.elapsed_secs = 0.0;
+                                self.next_click_beat = 0.0;
+                                if self.countdown_each_loop {
+                                    self.pre_roll_active = true;
+                                    self.pre_roll_beats = settings.tutor_pre_roll_beats;
+                                    self.pre_roll_remaining = self.pre_roll_beats as f64;
+                                }
+                                // reset statuses to allow another pass
+                                for s in &mut self.statuses { *s = None; }
+                            } else {
+                                // Stop and show end state
+                                self.playing = false;
+                                self.last_tick = None;
+                                // Prepare review summary
+                                let bpm_used = self.bpm as f64;
+                                let spb = 60.0 / bpm_used;
+                                let report = self.scoring.score_with_spb(&session.lesson, &self.hits, spb);
+                                let mut stats = session.lesson.stats.clone();
+                                let analytics = SessionAnalytics::new(report.clone());
+                                analytics.update_statistics(&mut stats);
+                                self.analytics = Some(analytics);
+                                self.review_active = true;
                             }
                         }
                     }
@@ -1087,7 +1192,8 @@ impl TutorPane {
             // Highway lanes
             let window_span = 8.0f64;
             let start = if self.freeze_playhead { self.playhead - window_span * 0.5 } else { self.playhead - 2.0 };
-            draw_highway(ui, &session.lesson, self.playhead, &self.statuses, start, window_span, self.freeze_playhead);
+            let loop_region = if self.loop_use_region { Some((self.loop_a.min(self.loop_b), self.loop_b.max(self.loop_a))) } else { None };
+            draw_highway(ui, &session.lesson, self.playhead, &self.statuses, start, window_span, self.freeze_playhead, loop_region);
             // Countdown overlay during pre-roll
             if self.pre_roll_active {
                 let overlay = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tutor_pre_roll")));
@@ -1098,14 +1204,61 @@ impl TutorPane {
                 let font = egui::TextStyle::Heading.resolve(ui.style());
                 overlay.text(center, egui::Align2::CENTER_CENTER, text, font, egui::Color32::from_rgb(255, 210, 0));
             }
+            // Prepare per-instrument stats before opening review window (avoids borrow issues)
+            let per_piece_snapshot: Option<std::collections::HashMap<DrumPiece, (u32,u32,u32,u32)>> = if self.review_active {
+                use std::collections::HashMap;
+                let mut per_piece: HashMap<DrumPiece, (u32,u32,u32,u32)> = HashMap::new();
+                for (i, ev) in session.lesson.notation.iter().enumerate() {
+                    let ent = per_piece.entry(ev.event.piece).or_insert((0,0,0,0));
+                    match self.statuses.get(i).and_then(|s| *s) {
+                        Some(HitLabel::OnTime) => ent.0 += 1,
+                        Some(HitLabel::Early) => ent.1 += 1,
+                        Some(HitLabel::Late) => ent.2 += 1,
+                        Some(HitLabel::Missed) => ent.3 += 1,
+                        None => {},
+                    }
+                }
+                Some(per_piece)
+            } else { None };
+
+            // Review overlay at end of run
+            if self.review_active {
+                egui::Window::new("Review Summary").collapsible(false).resizable(true).show(ui.ctx(), |ui| {
+                    if let Some(analytics) = &self.analytics {
+                        ui.heading(format!("Accuracy: {:.0}%", analytics.report.accuracy * 100.0));
+                    }
+                    if let Some(per_piece) = &per_piece_snapshot {
+                        ui.separator();
+                        ui.label("Per-instrument:");
+                        for (piece, (on, early, late, missed)) in per_piece.iter() {
+                            ui.label(format!(
+                                "{:?}: on {} · early {} · late {} · missed {}",
+                                piece, on, early, late, missed
+                            ));
+                        }
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Retry").clicked() {
+                            self.playhead = if self.loop_use_region { self.loop_a.min(self.loop_b) } else { 0.0 };
+                            self.elapsed_secs = 0.0;
+                            self.statuses.iter_mut().for_each(|s| *s = None);
+                            self.hits.clear();
+                            self.loops_done = 0;
+                            self.review_active = false;
+                        }
+                        if ui.button("Close").clicked() { self.review_active = false; }
+                    });
+                });
+            }
             // Legend
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 legend_dot(ui, egui::Color32::from_rgb(80,200,120), "On time");
-                legend_dot(ui, egui::Color32::from_rgb(160,80,200), "Late");
-                legend_dot(ui, egui::Color32::from_rgb(240,200,80), "Early");
+                legend_dot(ui, egui::Color32::from_rgb(240,160,60), "Late");
+                legend_dot(ui, egui::Color32::from_rgb(120,170,255), "Early");
                 legend_dot(ui, egui::Color32::from_rgb(220,80,80), "Missed");
-                legend_dot(ui, egui::Color32::from_rgb(120,170,255), "Not yet played");
+                legend_dot(ui, egui::Color32::from_gray(150), "Not yet played");
             });
 
             ui.label(format!("Mode: {:?}", session.mode));
@@ -1138,8 +1291,61 @@ impl TutorPane {
                     analytics.report.accuracy * 100.0
                 ));
             }
+            // Process deferred chart actions outside of the borrow of `session`
+            // Note: We use separate scopes above to avoid nested mutable borrows of `self`.
+            // The actions are performed here once `session` borrow has ended.
+            // (open/import may replace the current lesson; close resets the pane.)
+            // SAFETY: ui interactions above set these flags for this frame only.
         } else {
-            ui.label("Load a lesson from the extractor to begin practice.");
+            ui.label("Load a chart to begin practice.");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Import Chart").on_hover_text("Load a saved chart (.json)").clicked() { do_open_chart = true; }
+                if ui.button("Import MusicXML").on_hover_text("Import a MusicXML (.musicxml/.xml)").clicked() { do_import_xml = true; }
+                if ui.button("Load Sample").clicked() {
+                    // simple bass/snare groove like Studio sample
+                    let tempo = TempoMap::constant(100.0).unwrap();
+                    let mut events = Vec::new();
+                    for i in 0..8 {
+                        let beat = i as f64;
+                        events.push(NotatedEvent::new(
+                            DrumEvent::new(beat, DrumPiece::Bass, 110, DrumArticulation::Normal),
+                            Duration::milliseconds(500),
+                        ));
+                        events.push(NotatedEvent::new(
+                            DrumEvent::new(beat + 0.5, DrumPiece::Snare, 100, DrumArticulation::Normal),
+                            Duration::milliseconds(500),
+                        ));
+                    }
+                    let lesson = LessonDescriptor::new(
+                        "sample",
+                        "Sample Groove",
+                        "Bass on beats, snare on offbeats",
+                        1,
+                        tempo,
+                        events,
+                    );
+                    self.load_lesson(lesson);
+                }
+            });
+            ui.add_space(8.0);
+            ui.label("Tip: Use Studio to transcribe audio into a chart, then switch back to Practice.");
+        }
+        // Handle deferred actions (works both when session is Some or None)
+        if do_close_chart { self.session = None; self.hits.clear(); self.analytics = None; }
+        if do_open_chart {
+            if let Some(path) = FileDialog::new().add_filter("Chart", &["json"]).pick_file() {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    if let Ok(lesson) = serde_json::from_str::<LessonDescriptor>(&text) { self.load_lesson(lesson); }
+                }
+            }
+        }
+        if do_import_xml {
+            if let Some(path) = FileDialog::new().add_filter("MusicXML", &["musicxml", "xml"]).pick_file() {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    if let Ok(lesson) = taal_domain::io::MusicXmlImporter::import_str(&text) { self.load_lesson(lesson); }
+                }
+            }
         }
     }
 
@@ -1158,6 +1364,25 @@ impl TutorPane {
         self.latency_ms = settings.latency_ms;
         self.hit_window_ms = settings.tutor_hit_window_ms;
         self.pre_roll_beats = settings.tutor_pre_roll_beats;
+        // Practice settings
+        self.practice_match_window_pct = settings.practice_match_window_pct;
+        self.practice_on_time_pct = settings.practice_on_time_pct;
+        self.practice_match_cap_ms = settings.practice_match_cap_ms;
+        self.practice_on_time_cap_ms = settings.practice_on_time_cap_ms;
+        self.countdown_each_loop = settings.practice_countdown_each_loop;
+        self.loop_total = settings.practice_default_loop_count;
+        self.tempo_scale_default = settings.practice_tempo_scale_default;
+        // Initialize BPM from practice tempo scaling when appropriate
+        if let Some(session) = &self.session {
+            if !settings.tutor_use_lesson_tempo && !self.playing && self.playhead == 0.0 {
+                let base = session.lesson.default_tempo.events()[0].bpm;
+                self.bpm = (base * self.tempo_scale_default).clamp(40.0, 240.0);
+            }
+            // Update end_beat if not set
+            if self.end_beat <= 0.0 {
+                self.end_beat = session.lesson.notation.iter().map(|e| e.event.beat).fold(0.0, f64::max);
+            }
+        }
     }
 
     fn poll_midi(&mut self) {
@@ -1177,7 +1402,7 @@ impl TutorPane {
     }
 
     fn handle_live_hit(&mut self, piece: DrumPiece, vel: u8) {
-        // Convert latency to beats
+        // Convert latency to beats using current BPM
         let latency_beats = (self.latency_ms as f64) / 1000.0 * (self.bpm as f64) / 60.0;
         let hit_beat = (self.playhead - latency_beats).max(0.0);
         if let Some(session) = &mut self.session {
@@ -1187,13 +1412,16 @@ impl TutorPane {
                 if ev.event.piece != piece { continue; }
                 if self.statuses.get(i).copied().flatten().is_some() { continue; }
                 let d = (ev.event.beat - hit_beat).abs();
-                let beat_window = (self.hit_window_ms / 1000.0) * (self.bpm as f64) / 60.0;
-                if d < beat_window { if best.map(|(_, bd)| d < bd).unwrap_or(true) { best = Some((i, d)); } }
+                let pct_beats = (self.practice_match_window_pct as f64) / 100.0;
+                let cap_beats = (self.practice_match_cap_ms as f64 / 1000.0) * (self.bpm as f64) / 60.0;
+                let beat_window = pct_beats.min(cap_beats);
+                if d < beat_window && best.map(|(_, bd)| d < bd).unwrap_or(true) { best = Some((i, d)); }
             }
             if let Some((idx, _)) = best {
                 let expected = session.lesson.notation[idx].event.beat;
                 let delta = hit_beat - expected;
-                let ontime_beats = (20.0 / 1000.0) * (self.bpm as f64) / 60.0; // 20ms band
+                let ontime_beats = ((self.practice_on_time_pct as f64) / 100.0)
+                    .min((self.practice_on_time_cap_ms as f64 / 1000.0) * (self.bpm as f64) / 60.0);
                 let label = if delta.abs() < ontime_beats { HitLabel::OnTime } else if delta > 0.0 { HitLabel::Late } else { HitLabel::Early };
                 if let Some(s) = self.statuses.get_mut(idx) { *s = Some(label); }
                 let ev = DrumEvent::new(hit_beat, piece, vel, DrumArticulation::Normal);
@@ -1205,7 +1433,7 @@ impl TutorPane {
 
 }
 
-fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses: &[Option<HitLabel>], start: f64, window_span: f64, freeze_playhead: bool) {
+fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses: &[Option<HitLabel>], start: f64, window_span: f64, _freeze_playhead: bool, loop_region: Option<(f64,f64)>) {
     let lanes = ordered_lanes();
         let lane_h = 28.0f32;
         let margin = 8.0f32;
@@ -1255,6 +1483,22 @@ fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses:
             b += 1.0;
         }
 
+        // Loop region highlight
+        if let Some((a, b)) = loop_region {
+            let x0 = to_x(a.max(start));
+            let x1 = to_x(b.min(end));
+            if x1 > x0 {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(x0, top),
+                        egui::pos2(x1, rect.bottom())
+                    ),
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 0, 24)
+                );
+            }
+        }
+
         // Draw expected notes and status colors
         for (i, ev) in lesson.notation.iter().enumerate() {
             if ev.event.beat < start || ev.event.beat > end { continue; }
@@ -1263,10 +1507,10 @@ fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses:
             let x = to_x(ev.event.beat);
             let color = match statuses.get(i).and_then(|s| *s) {
                 Some(HitLabel::OnTime) => egui::Color32::from_rgb(80, 200, 120),
-                Some(HitLabel::Late) => egui::Color32::from_rgb(160, 80, 200),
-                Some(HitLabel::Early) => egui::Color32::from_rgb(240, 200, 80),
+                Some(HitLabel::Late) => egui::Color32::from_rgb(240, 160, 60),
+                Some(HitLabel::Early) => egui::Color32::from_rgb(120, 170, 255),
                 Some(HitLabel::Missed) => egui::Color32::from_rgb(220, 80, 80),
-                None => egui::Color32::from_rgb(120, 170, 255), // Not yet played
+                None => egui::Color32::from_gray(150), // Not yet played
             };
             painter.circle_filled(egui::pos2(x, y), 7.5, color);
         }
@@ -1404,6 +1648,9 @@ fn piece_from_lane_click(pos: egui::Pos2, rect: egui::Rect) -> Option<DrumPiece>
 #[derive(Clone, Copy, Debug)]
 enum HitLabel { OnTime, Late, Early, Missed }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PracticeUIMode { FreePlay, Test }
+
 fn ordered_lanes() -> Vec<DrumPiece> {
     use DrumPiece::*;
     vec![Crash, Ride, HiHatOpen, HiHatClosed, Snare, HighTom, LowTom, FloorTom, Bass]
@@ -1450,6 +1697,14 @@ struct SettingsPane {
     tutor_hit_window_ms: f64,
     tutor_pre_roll_beats: u8,
     tutor_use_lesson_tempo: bool,
+    // Practice (Tutor) settings
+    practice_match_window_pct: f32,
+    practice_on_time_pct: f32,
+    practice_match_cap_ms: f32,
+    practice_on_time_cap_ms: f32,
+    practice_countdown_each_loop: bool,
+    practice_default_loop_count: u8,
+    practice_tempo_scale_default: f32,
     // autosave debounce
     autosave_due: Option<Instant>,
 }
@@ -1489,6 +1744,13 @@ impl SettingsPane {
             tutor_hit_window_ms: 75.0,
             tutor_pre_roll_beats: 4,
             tutor_use_lesson_tempo: false,
+            practice_match_window_pct: 12.5,
+            practice_on_time_pct: 7.5,
+            practice_match_cap_ms: 75.0,
+            practice_on_time_cap_ms: 40.0,
+            practice_countdown_each_loop: false,
+            practice_default_loop_count: 2,
+            practice_tempo_scale_default: 0.8,
             autosave_due: None,
         };
         s.refresh_audio_devices();
@@ -1583,6 +1845,31 @@ impl SettingsPane {
                 toggle_row(ui, "High contrast mode", &mut self.high_contrast);
                 toggle_row(ui, "Play screen note streaks", &mut self.play_streaks);
                 toggle_row(ui, "New Keys Experience", &mut self.new_keys_exp);
+                ui.separator();
+                ui.heading("Practice");
+                ui.label("Hit windows (% of beat)");
+                ui.horizontal(|ui| {
+                    ui.label("Match");
+                    ui.add(egui::Slider::new(&mut self.practice_match_window_pct, 2.5..=25.0).suffix(" %"));
+                    ui.label("On-time");
+                    ui.add(egui::Slider::new(&mut self.practice_on_time_pct, 2.5..=20.0).suffix(" %"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Caps (ms)");
+                    ui.label("Match");
+                    ui.add(egui::Slider::new(&mut self.practice_match_cap_ms, 20.0..=150.0).suffix(" ms"));
+                    ui.label("On-time");
+                    ui.add(egui::Slider::new(&mut self.practice_on_time_cap_ms, 10.0..=100.0).suffix(" ms"));
+                });
+                toggle_row(ui, "Countdown each loop", &mut self.practice_countdown_each_loop);
+                ui.horizontal(|ui| {
+                    ui.label("Default loop count");
+                    ui.add(egui::Slider::new(&mut self.practice_default_loop_count, 1..=10));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Default tempo scaling");
+                    ui.add(egui::Slider::new(&mut self.practice_tempo_scale_default, 0.5..=1.25).suffix("×"));
+                });
             });
             ui.end_row();
 
@@ -1638,6 +1925,13 @@ impl SettingsPane {
             tutor_hit_window_ms: self.tutor_hit_window_ms,
             tutor_pre_roll_beats: self.tutor_pre_roll_beats,
             tutor_use_lesson_tempo: self.tutor_use_lesson_tempo,
+            practice_match_window_pct: Some(self.practice_match_window_pct),
+            practice_on_time_pct: Some(self.practice_on_time_pct),
+            practice_match_cap_ms: Some(self.practice_match_cap_ms),
+            practice_on_time_cap_ms: Some(self.practice_on_time_cap_ms),
+            practice_countdown_each_loop: Some(self.practice_countdown_each_loop),
+            practice_default_loop_count: Some(self.practice_default_loop_count),
+            practice_tempo_scale_default: Some(self.practice_tempo_scale_default),
         }
     }
 
@@ -1656,6 +1950,14 @@ impl SettingsPane {
         self.tutor_hit_window_ms = data.tutor_hit_window_ms;
         self.tutor_pre_roll_beats = data.tutor_pre_roll_beats;
         self.tutor_use_lesson_tempo = data.tutor_use_lesson_tempo;
+        // Practice defaults with fallbacks for older settings files
+        self.practice_match_window_pct = data.practice_match_window_pct.unwrap_or(12.5);
+        self.practice_on_time_pct = data.practice_on_time_pct.unwrap_or(7.5);
+        self.practice_match_cap_ms = data.practice_match_cap_ms.unwrap_or(75.0);
+        self.practice_on_time_cap_ms = data.practice_on_time_cap_ms.unwrap_or(40.0);
+        self.practice_countdown_each_loop = data.practice_countdown_each_loop.unwrap_or(false);
+        self.practice_default_loop_count = data.practice_default_loop_count.unwrap_or(2);
+        self.practice_tempo_scale_default = data.practice_tempo_scale_default.unwrap_or(0.8);
         if let Some(name) = &data.audio_device {
             if let Some(i) = self.audio_devices.iter().position(|n| n == name) { self.selected_audio = Some(i); }
         }
@@ -1984,6 +2286,14 @@ struct PersistedSettings {
     tutor_hit_window_ms: f64,
     tutor_pre_roll_beats: u8,
     tutor_use_lesson_tempo: bool,
+    // Practice (Tutor) settings — optional for backward compatibility
+    practice_match_window_pct: Option<f32>,
+    practice_on_time_pct: Option<f32>,
+    practice_match_cap_ms: Option<f32>,
+    practice_on_time_cap_ms: Option<f32>,
+    practice_countdown_each_loop: Option<bool>,
+    practice_default_loop_count: Option<u8>,
+    practice_tempo_scale_default: Option<f32>,
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {

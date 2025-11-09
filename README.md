@@ -3,7 +3,7 @@
 Taal is a drum tutoring software built around two primary experiences:
 
 1. **Studio (formerly Extractor)** – Import audio via file dialog, transcribe into editable notation, or start a new chart from scratch.
-2. **Interactive Tutoring** – Connect electronic drum kits over MIDI for real-time lessons, feedback, and practice tools.
+2. **Practice** – Connect electronic drum kits over MIDI for real-time feedback and practice tools.
 
 ## Documentation Index
 
@@ -65,8 +65,11 @@ Each crate includes targeted unit tests. Execute `cargo test --workspace` for th
 - Basic editing: piece selection, click-to-add notes, right-click delete, selection + drag to move, snap-to-grid, and a waveform backdrop when an audio file is selected.
 - Transport: play/pause, BPM, loop in/out, visible playhead, and a simple metronome click.
 - Settings: MIDI device picker with refresh; audio device dropdown (placeholder if backend is unavailable), exclusive mode toggle, latency and volume sliders; test tone playback; high‑contrast theme toggle; visual MIDI mapping wizard (click a pad then hit your kit) with revert.
-- Tutor: live MIDI input mapped via your kit profile; hits advance session.
-- Tutor: per‑instrument "note highway" lanes (Crash/Ride/Hi‑Hat/Snare/Toms/Kick), moving playhead, and color-coded hit states (green on-time, purple late, yellow early, red missed, blue not-yet-played). Includes Play/Pause, BPM control, optional “Use lesson tempo” (TempoMap), metronome toggle/volume, pre‑roll count‑in, and adjustable hit window. Scoring uses millisecond timing with your current BPM (or lesson tempo).
+- Practice: live MIDI input mapped via your kit profile; hits advance session.
+- Practice: per‑instrument "note highway" lanes (Crash/Ride/Hi‑Hat/Snare/Toms/Kick), moving playhead, and color-coded hit states (green on-time, blue early, orange late, red missed, gray not-yet-played). Includes Play/Pause, BPM control, optional “Use lesson tempo” (TempoMap), pre‑roll count‑in, and configurable hit windows.
+
+### Practice Settings
+- Configurable hit windows (percent of beat + ms caps), countdown behavior (first loop only vs every loop), default loop count, and default tempo scaling. See `docs/UX_OVERVIEW.md` and `docs/ARCHITECTURE.md`.
 
 See also: `docs/UX_OVERVIEW.md` for the short roadmap.
 
@@ -98,3 +101,12 @@ Recommended input: short mono/stereo files at 44.1k or 48k sample rate in common
 - TLS stack uses `rustls` via `reqwest` to avoid system OpenSSL requirements.
 - Audio decoding uses `symphonia` with features for `aac`, `flac`, `mp3`, `vorbis`, and `wav`.
 - `realfft` is pinned to `3.5` (future DSP), not yet used in code.
+
+## Docs Update Checklist
+- When adding or changing UI features, update:
+  - `docs/UX_OVERVIEW.md` (user-facing flow, controls, legends)
+  - `docs/ARCHITECTURE.md` (high-level modules, Settings surfaces)
+  - `docs/LOW_LEVEL_DESIGN.md` (crate responsibilities and state machines)
+  - `README.md` (Features or What’s New summaries)
+- Keep terminology consistent between Studio and Tutor (e.g., “Chart”).
+- If Settings gain new options, add them to the Settings pane and persisted model.

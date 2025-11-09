@@ -9,13 +9,15 @@
    - Transport: play/pause, BPM slider, loop A/B, playhead, metronome clicks.
    - Live MIDI record: arm “Record MIDI”, press Play, and perform to lay down notes (snaps to grid).
 
-2. Tutor
-   - Practice loaded charts with a per-instrument note highway (lanes) and moving playhead.
-   - Color-coded hits: green (on time), purple (late), yellow (early), red (missed).
-   - Not-yet-played notes render in blue until evaluated.
-   - Play/Pause, BPM control, “Use lesson tempo” (variable tempo via the lesson’s TempoMap), metronome toggle/volume, pre‑roll count‑in, adjustable hit window.
-   - Scoring uses millisecond timing derived from the current practice BPM (or lesson tempo when enabled). Uses mapping and latency compensation from Settings.
-   - Legend explains color states: green (on‑time), purple (late), yellow (early), red (missed), blue (not yet played).
+2. Practice
+   - Empty state shows quick actions: Import Chart (JSON), Import MusicXML, Load Sample.
+   - Modes:
+     - Free Play: infinite loop, no missed-note penalties; continuous timing feedback.
+     - Test: single pass through the chart or selected region; shows Review at the end.
+   - Import MusicXML or an existing chart and practice with a per-instrument note highway and moving playhead.
+   - Color-coded hits: green (on-time), blue (early), orange (late), red (missed), gray (not-yet-played).
+   - Play/Pause, BPM control, “Use lesson tempo” (TempoMap), pre‑roll count‑in, configurable hit windows (percent-of-beat + ms caps).
+   - A/B loop: set region start (A) and end (B). Free Play loops indefinitely; Test plays region once.
    - Countdown overlay during pre‑roll displays 3‑2‑1‑Go.
    - “Freeze playhead” mode keeps the playhead centered while notes scroll.
 
@@ -34,6 +36,11 @@
    - Audio section with device dropdown (placeholder if backend unavailable), exclusive mode toggle, latency slider, and main volume.
    - Options: app sounds, auto‑preview, high contrast, note streaks, new keys experience.
    - Mapping wizard: visual drum kit, click a pad then hit your kit to bind notes; revert all mappings. Latency calibration implemented (beep + hit average of multiple trials).
+   - Practice:
+     - Hit window configuration: On‑Time zone and overall match window as % of beat with ms caps.
+     - Countdown behavior: first loop only (default) vs every loop.
+     - Default loop count per practice session.
+     - Tempo scaling default (e.g., start at 80%).
 
 ## Near-Term Improvements
 
