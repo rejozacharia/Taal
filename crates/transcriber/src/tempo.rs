@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tracing::debug;
 
-use taal_domain::{DomainError, TempoEvent, TempoMap};
+use taal_domain::{TempoEvent, TempoMap};
 
 #[derive(Default)]
 pub struct TempoEstimator;

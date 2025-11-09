@@ -56,21 +56,21 @@ impl AudioDecoder {
                     let buffer = decoder.decode(&packet)?;
                     match buffer {
                         AudioBufferRef::F32(buf) => {
-                            let channels = buf.spec().channels.count() as usize;
+                    let channels = buf.spec().channels.count();
                             for ch in 0..channels {
                                 let data = buf.chan(ch);
                                 samples.extend_from_slice(data);
                             }
                         }
                         AudioBufferRef::U8(buf) => {
-                            let channels = buf.spec().channels.count() as usize;
+                    let channels = buf.spec().channels.count();
                             for ch in 0..channels {
                                 let data = buf.chan(ch);
                                 samples.extend(data.iter().map(|&s| (s as f32 / 255.0) * 2.0 - 1.0));
                             }
                         }
                         AudioBufferRef::S16(buf) => {
-                            let channels = buf.spec().channels.count() as usize;
+                    let channels = buf.spec().channels.count();
                             for ch in 0..channels {
                                 let data = buf.chan(ch);
                                 samples.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
