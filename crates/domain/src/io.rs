@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{error::DomainError, lesson::LessonDescriptor, DrumPiece, NotatedEvent};
+use crate::{error::DomainError, lesson::LessonDescriptor, DrumPiece, NotatedEvent, TempoMap};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -156,6 +156,120 @@ impl NotationExporter for SimpleMusicXmlExporter {
         s.push_str("  </part>\n</score-partwise>\n");
         Ok(s.into_bytes())
     }
+}
+
+// Importers
+
+pub enum ImportFormat {
+    MusicXml,
+}
+
+pub struct MusicXmlImporter;
+
+impl MusicXmlImporter {
+    pub fn import_str(xml: &str) -> Result<LessonDescriptor, DomainError> {
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut reader = Reader::from_str(xml);
+        reader.trim_text(true);
+
+        let mut buf = Vec::new();
+        let mut divisions: f64 = 1.0; // divisions per quarter
+        let mut bpm: f32 = 120.0;
+        let mut beats_accum: f64 = 0.0; // in quarter-note beats
+        let mut notation: Vec<NotatedEvent> = Vec::new();
+        let mut current_instrument: Option<String> = None;
+        let mut in_note = false;
+        let mut is_rest = false;
+        let mut note_duration_divs: Option<f64> = None;
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Eof) => break,
+                Ok(Event::Start(e)) => {
+                    match e.name().as_ref() {
+                        b"divisions" => {
+                            if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
+                                if let Ok(v) = t.unescape().unwrap_or_default().parse::<f64>() { divisions = v.max(1.0); }
+                            }
+                        }
+                        b"sound" => {
+                            for a in e.attributes().flatten() {
+                                if a.key.as_ref() == b"tempo" {
+                                    if let Ok(s) = a.unescape_value() { if let Ok(v) = s.parse::<f32>() { bpm = v.max(1.0); } }
+                                }
+                            }
+                        }
+                        b"note" => { in_note = true; is_rest = false; note_duration_divs = None; current_instrument = None; }
+                        b"rest" => { if in_note { is_rest = true; } }
+                        b"duration" => {
+                            if in_note {
+                                if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
+                                    if let Ok(v) = t.unescape().unwrap_or_default().parse::<f64>() { note_duration_divs = Some(v); }
+                                }
+                            }
+                        }
+                        b"instrument" => {
+                            if in_note {
+                                for a in e.attributes().flatten() {
+                                    if a.key.as_ref() == b"id" { if let Ok(s) = a.unescape_value() { current_instrument = Some(s.to_string()); } }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    match e.name().as_ref() {
+                        b"note" => {
+                            if !is_rest {
+                                let divs = note_duration_divs.unwrap_or(divisions);
+                                let dur_beats = divs / divisions; // in quarter beats
+                                let piece = current_instrument
+                                    .as_ref()
+                                    .and_then(|s| map_instr_to_piece(s))
+                                    .unwrap_or(DrumPiece::Snare);
+                                let ev = crate::events::DrumEvent::new(beats_accum, piece, 96, crate::events::DrumArticulation::Normal);
+                                let spb = 60.0 / bpm as f64;
+                                let dur_ms = (dur_beats * spb * 1000.0) as i64;
+                                notation.push(NotatedEvent::new(ev, time::Duration::milliseconds(dur_ms)));
+                                beats_accum += dur_beats;
+                            } else {
+                                let divs = note_duration_divs.unwrap_or(divisions);
+                                let dur_beats = divs / divisions; beats_accum += dur_beats;
+                            }
+                            in_note = false; is_rest = false; note_duration_divs = None; current_instrument = None;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        let tempo = TempoMap::constant(bpm).map_err(|e| DomainError::validation(e.to_string()))?;
+        Ok(LessonDescriptor::new("imported-musicxml", "Imported MusicXML", "", 1, tempo, notation))
+    }
+}
+
+fn map_instr_to_piece(id: &str) -> Option<DrumPiece> {
+    let l = id.to_ascii_lowercase();
+    if l.contains("snare") { return Some(DrumPiece::Snare); }
+    if l.contains("kick") || l.contains("bass") { return Some(DrumPiece::Bass); }
+    if l.contains("hihat") || l.contains("hi-hat") {
+        if l.contains("open") { return Some(DrumPiece::HiHatOpen); }
+        return Some(DrumPiece::HiHatClosed);
+    }
+    if l.contains("ride") { return Some(DrumPiece::Ride); }
+    if l.contains("crash") { return Some(DrumPiece::Crash); }
+    if l.contains("floor") { return Some(DrumPiece::FloorTom); }
+    if l.contains("tom") {
+        if l.contains("high") || l.contains("hi ") { return Some(DrumPiece::HighTom); }
+        if l.contains("low") { return Some(DrumPiece::LowTom); }
+        return Some(DrumPiece::HighTom);
+    }
+    None
 }
 
 #[cfg(test)]

@@ -295,6 +295,19 @@ impl ExtractorPane {
                     }
                 }
             }
+            if ui.button("Import MusicXML").on_hover_text("Import a MusicXML (.musicxml/.xml)").clicked() {
+                if let Some(path) = FileDialog::new().add_filter("MusicXML", &["musicxml", "xml"]).pick_file() {
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => {
+                            match taal_domain::io::MusicXmlImporter::import_str(&text) {
+                                Ok(lesson) => { self.editor = Some(NotationEditor::new(lesson)); self.status_message = Some(format!("Imported: {}", path.display())); }
+                                Err(err) => { self.status_message = Some(format!("Import failed: {}", err)); }
+                            }
+                        }
+                        Err(err) => { self.status_message = Some(format!("Read failed: {}", err)); }
+                    }
+                }
+            }
             if ui.button("Save Chart").on_hover_text("Save current chart to JSON").clicked() {
                 if let Some(editor) = &self.editor {
                     if let Some(path) = FileDialog::new().set_file_name("chart.json").save_file() {
