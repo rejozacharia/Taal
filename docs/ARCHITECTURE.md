@@ -18,7 +18,7 @@
 2. **Notation & Editing (`crates/notation`):**
    - Drum staff rendering components reusable in both CLI and GUI contexts.
    - Symbol palette, grid snapping, tuplets, stickings, and dynamics editing.
-3. **Tutoring Core (`crates/tutor`):**
+3. **Practice Core (`crates/tutor`):**
    - MIDI ingestion, latency calibration, scoring algorithms, practice mode state machines.
    - Playback engine for backing tracks, click, and synthesized drum sounds.
 4. **Desktop Application (`apps/desktop`):**
@@ -45,7 +45,7 @@
 - Persist extraction sessions in SQLite for quick reload and comparison.
 - Provide hooks so extracted notation flows directly into the tutoring practice queue.
 
-## Component 2 – Interactive Tutoring Environment
+## Component 2 – Practice Environment
 ### Features
 - MIDI connectivity wizard to map pads/zones and calibrate latency.
 - Practice modes inspired by Melodics: Learn (step-through), Practice (loop and tempo ramping), Perform (full-speed scoring).
@@ -57,6 +57,17 @@
 - Real-time loop runs on a dedicated audio thread; UI communicates via crossbeam channels.
 - Scoring logic uses high-resolution timers and quantized expectation maps derived from notation.
 - Bundle curated sample packs and allow routing to external VST hosts in later iterations.
+
+### Settings > Practice
+- Hit window configuration
+  - Match window as % of beat (default 12.5%) with ms cap (75 ms).
+  - On‑time window as % of beat (default 7.5%) with ms cap (40 ms).
+- Countdown behavior
+  - First loop only (default) vs every loop.
+- Defaults
+  - Default loop count per session (default 2).
+  - Default tempo scaling for practice (e.g., start at 80%).
+  - Pre‑roll bars (default 1 bar / 4 beats).
 
 ## Marketplace & Future Extensions
 - Start with local content packs authored by instructors.
@@ -82,7 +93,7 @@ The workspace is implemented and builds end‑to‑end. The following components
 4. Notation editor (`egui`) — simple event visualization; editor features TBD.
 5. Tutor core (session state, scoring, MIDI enumeration) — basic flow and tests; MIDI input tested conditionally.
 6. Services (marketplace client) — placeholder API surface; networking over `reqwest`+`rustls`.
-7. Desktop app (Studio/Tutor/Marketplace tabs) — skeleton UI wired to core crates.
+7. Desktop app (Studio/Practice/Marketplace tabs) — skeleton UI wired to core crates.
 
 Implementation details recently updated:
 
@@ -112,7 +123,7 @@ flowchart LR
     end
 
     Desktop -->|extractor UI| Transcriber
-    Desktop -->|tutor UI| Tutor
+    Desktop -->|practice UI| Tutor
     Desktop -->|marketplace UI| Services
     TranscribeCLI --> Transcriber
     DatasetCLI --> Audio
