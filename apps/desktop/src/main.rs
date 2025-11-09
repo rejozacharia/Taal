@@ -18,7 +18,7 @@ use taal_tutor::{PracticeMode, ScoringEngine, SessionAnalytics, SessionState};
 use tokio::runtime::Runtime;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver};
 use midir::{MidiInput, MidiInputConnection};
 use dirs;
@@ -146,6 +146,19 @@ struct ExtractorPane {
     lane_mode: bool,
     // Drag state
     drag_on_selected: bool,
+    // Multi-select
+    selected_set: std::collections::HashSet<usize>,
+    marquee_start: Option<egui::Pos2>,
+    marquee_active: bool,
+    // Click timing for double-click
+    last_click_time: Option<std::time::Instant>,
+    last_click_idx: Option<usize>,
+    // Lane mute/solo sets
+    lane_mute: HashSet<DrumPiece>,
+    lane_solo: HashSet<DrumPiece>,
+    // Undo/redo stacks (notation snapshots)
+    undo_stack: Vec<Vec<taal_domain::NotatedEvent>>,
+    redo_stack: Vec<Vec<taal_domain::NotatedEvent>>,
 }
 
 impl ExtractorPane {
@@ -181,6 +194,15 @@ impl ExtractorPane {
             record_latency_ms: 0.0,
             lane_mode: true,
             drag_on_selected: false,
+            selected_set: std::collections::HashSet::new(),
+            marquee_start: None,
+            marquee_active: false,
+            last_click_time: None,
+            last_click_idx: None,
+            lane_mute: HashSet::new(),
+            lane_solo: HashSet::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -360,15 +382,26 @@ impl ExtractorPane {
                     });
             });
             ui.separator();
-            // Lane controls: basic Solo/Mute UI (placeholder solo uses selected_piece)
+            // Lane controls: Mute/Solo per lane
             if self.lane_mode {
-                ui.label("Lane controls (Solo)");
+                ui.label("Lane controls (Mute / Solo)");
                 let lanes = studio_lanes();
                 ui.horizontal_wrapped(|ui| {
+                    if ui.small_button("Clear solo").clicked() { self.lane_solo.clear(); }
+                    if ui.small_button("Clear mute").clicked() { self.lane_mute.clear(); }
                     for piece in lanes {
-                        if ui.small_button(format!("S {:?}", piece)).on_hover_text("Solo this lane for audition").clicked() {
-                            self.selected_piece = piece;
-                        }
+                        ui.group(|ui| {
+                            ui.label(format!("{:?}", piece));
+                            let is_mute = self.lane_mute.contains(&piece);
+                            let is_solo = self.lane_solo.contains(&piece);
+                            if ui.small_button(if is_mute {"M*"} else {"M"}).on_hover_text("Toggle mute").clicked() {
+                                if is_mute { self.lane_mute.remove(&piece); } else { self.lane_mute.insert(piece); }
+                            }
+                            ui.add_space(4.0);
+                            if ui.small_button(if is_solo {"S*"} else {"S"}).on_hover_text("Toggle solo").clicked() {
+                                if is_solo { self.lane_solo.remove(&piece); } else { self.lane_solo.insert(piece); }
+                            }
+                        });
                     }
                 });
             }
@@ -392,6 +425,9 @@ impl ExtractorPane {
                     self.status_message = Some("__DO_QUANTIZE_ALL__".into());
                 }
                 ui.separator();
+                if ui.button("Undo").on_hover_text("Undo last change (Ctrl+Z)").clicked() { self.undo(); }
+                if ui.button("Redo").on_hover_text("Redo (Ctrl+Shift+Z)").clicked() { self.redo(); }
+                ui.separator();
                 ui.checkbox(&mut self.lane_mode, "Lane editor").on_hover_text("Compose per instrument in lanes (Snare first)");
             });
         });
@@ -404,10 +440,22 @@ impl ExtractorPane {
             // take editor out briefly to avoid nested borrow
             let mut tmp = None;
             std::mem::swap(&mut self.editor, &mut tmp);
-            if let Some(mut ed) = tmp { self.quantize_all(&mut ed); self.editor = Some(ed); }
+            if let Some(mut ed) = tmp {
+                let snapshot = ed.lesson().notation.clone();
+                self.undo_stack.push(snapshot); self.redo_stack.clear();
+                self.quantize_all(&mut ed);
+                self.editor = Some(ed);
+            }
             self.status_message = Some("Quantized all".into());
         }
         if let Some(editor) = &mut self.editor {
+            // apply recorded notes (snapshot for undo if needed)
+            if !recorded.is_empty() {
+                let snapshot = editor.lesson().notation.clone();
+                self.undo_stack.push(snapshot); self.redo_stack.clear();
+                for ev in recorded.drain(..) { editor.push_event(ev); }
+            }
+
             // advance transport
             if self.playing {
                 let now = std::time::Instant::now();
@@ -418,15 +466,19 @@ impl ExtractorPane {
                     // Trigger preview sounds for events crossed since last frame
                     let prev = self.last_tick.map(|_| self.playhead - dt * (self.bpm as f64) / 60.0).unwrap_or(self.playhead);
                     let (a, b) = if self.loop_enabled && prev > self.playhead { (prev, self.loop_end) } else { (prev, self.playhead) };
-                    let mut fired = 0usize;
                     for ev in editor.lesson().notation.iter() {
                         if ev.event.beat > a && ev.event.beat <= b {
-                            fired += 1;
-                            settings.play_drum(ev.event.piece, ev.event.velocity, 80, settings.main_volume * 0.8);
+                            let audible = if !self.lane_solo.is_empty() { self.lane_solo.contains(&ev.event.piece) } else { !self.lane_mute.contains(&ev.event.piece) };
+                            if audible { settings.play_drum(ev.event.piece, ev.event.velocity, 80, settings.main_volume * 0.8); }
                         }
                     }
                     if self.loop_enabled && prev > self.playhead {
-                        for ev in editor.lesson().notation.iter() { if ev.event.beat > self.loop_start && ev.event.beat <= self.playhead { settings.play_drum(ev.event.piece, ev.event.velocity, 80, settings.main_volume * 0.8); } }
+                        for ev in editor.lesson().notation.iter() {
+                            if ev.event.beat > self.loop_start && ev.event.beat <= self.playhead {
+                                let audible = if !self.lane_solo.is_empty() { self.lane_solo.contains(&ev.event.piece) } else { !self.lane_mute.contains(&ev.event.piece) };
+                                if audible { settings.play_drum(ev.event.piece, ev.event.velocity, 80, settings.main_volume * 0.8); }
+                            }
+                        }
                     }
                 }
                 self.last_tick = Some(now);
@@ -444,7 +496,7 @@ impl ExtractorPane {
 
             // Zoom/pan/loop interactions
             let mut response = if self.lane_mode {
-                draw_studio_lanes(ui, editor.lesson(), self.view_start, self.view_span, Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None })
+                draw_studio_lanes(ui, editor.lesson(), self.view_start, self.view_span, Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None }, &self.lane_solo, &self.lane_mute)
             } else {
                 editor.draw_with_timeline(ui, self.view_start, self.view_span, self.waveform.as_deref(), Some(self.playhead), if self.loop_enabled { Some((self.loop_start, self.loop_end)) } else { None })
             };
@@ -492,11 +544,27 @@ impl ExtractorPane {
             };
             draw_studio_axis_with_bounds(ui, response.rect, self.view_start, self.view_span, editor.lesson(), left, right);
 
+            // Highlight selected notes (outline) when lane editor is on
+            if self.lane_mode && (!self.selected_set.is_empty() || self.selected_event.is_some()) {
+                let lane_h = 26.0f32; let margin = 8.0f32; let top = response.rect.top() + margin;
+                let mut rings: Vec<usize> = self.selected_set.iter().copied().collect();
+                if let Some(i) = self.selected_event { if !self.selected_set.contains(&i) { rings.push(i); } }
+                for i in rings {
+                    if let Some(ev) = editor.lesson().notation.get(i) {
+                        if let Some(row) = studio_lanes().iter().position(|p| *p == ev.event.piece) {
+                            let tt = ((ev.event.beat - self.view_start) / self.view_span).clamp(0.0, 1.0) as f32;
+                            let x = left + (right - left) * tt; let y = top + row as f32 * lane_h + lane_h * 0.5;
+                            ui.painter().circle_stroke(egui::pos2(x, y), 8.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+                        }
+                    }
+                }
+            }
+
             // Click to add/select/drag note
             if let Some(pos) = response.interact_pointer_pos() {
                 // In lane mode, ignore clicks outside the lane band to avoid confusing sticky selection
                 let lane_ok = if self.lane_mode { piece_from_lane_click(pos, response.rect).is_some() } else { true };
-                if !lane_ok { self.selected_event = None; self.drag_on_selected = false; } else {
+                if !lane_ok { self.selected_event = None; self.drag_on_selected = false; self.marquee_active = false; self.selected_set.clear(); } else {
                 let rect = response.rect;
                 // Map x->beat using content bounds (lanes have left/right inset)
                 let (left, right) = if self.lane_mode { (rect.left() + 90.0, rect.right() - 8.0) } else { (rect.left(), rect.right()) };
@@ -513,14 +581,28 @@ impl ExtractorPane {
                 let near_enough = near_idx
                     .map(|i| (editor.lesson().notation[i].event.beat - beat).abs() <= 0.3)
                     .unwrap_or(false);
+                let now_click = std::time::Instant::now();
 
                 // Start dragging only if drag starts on an existing note
                 if response.drag_started() {
                     if let Some(i) = near_idx { if near_enough { self.selected_event = Some(i); self.drag_on_selected = true; } }
+                    // Box-select without modifier when starting on empty area (or Shift+drag)
+                    let mods = ui.input(|i| i.modifiers);
+                    if !self.drag_on_selected && !near_enough {
+                        self.marquee_start = Some(pos);
+                        self.marquee_active = true;
+                        if !mods.shift && !mods.ctrl && !mods.command { self.selected_set.clear(); }
+                    } else if mods.shift && !self.drag_on_selected {
+                        self.marquee_start = Some(pos);
+                        self.marquee_active = true;
+                        self.selected_set.clear();
+                    }
                 }
 
                 // Right-click deletes nearest event (by beat) of same piece within threshold.
                 if response.clicked_by(egui::PointerButton::Secondary) {
+                    let snapshot = editor.lesson().notation.clone();
+                    self.undo_stack.push(snapshot); self.redo_stack.clear();
                     let del_piece = lane_piece.or(Some(self.selected_piece));
                     let idx = nearest_event_index(editor, beat, del_piece);
                     if let Some(i) = idx { editor.lesson_mut().notation.remove(i); self.selected_event = None; }
@@ -528,33 +610,119 @@ impl ExtractorPane {
 
                 // Left-click: select if near existing (in lane when lane_mode), else add
                 if response.clicked_by(egui::PointerButton::Primary) {
-                    if near_enough {
-                        if let Some(i) = near_idx { editor.lesson_mut().notation.remove(i); }
-                        self.selected_event = None;
-                        self.drag_on_selected = false;
+                    let mods = ui.input(|i| i.modifiers);
+                    // Ctrl/Cmd-click: toggle note selection only; do not add/clear
+                    if mods.ctrl || mods.command {
+                        if let Some(i) = near_idx { if near_enough {
+                            if self.selected_set.contains(&i) { self.selected_set.remove(&i); } else { self.selected_set.insert(i); }
+                            self.selected_event = Some(i);
+                            self.last_click_idx = Some(i); self.last_click_time = Some(now_click);
+                        }}
+                    } else
+                    if let Some(i) = near_idx {
+                        if near_enough {
+                            // Double-click to delete
+                            let is_double = self.last_click_idx == Some(i)
+                                && self.last_click_time.map(|t| now_click.duration_since(t).as_millis() < 350).unwrap_or(false);
+                            if is_double {
+                                let snapshot = editor.lesson().notation.clone();
+                                self.undo_stack.push(snapshot); self.redo_stack.clear();
+                                editor.lesson_mut().notation.remove(i);
+                                self.selected_set.remove(&i);
+                                self.selected_event = None;
+                                self.drag_on_selected = false;
+                                self.last_click_idx = None;
+                                self.last_click_time = None;
+                            } else {
+                                // Toggle selection of this note
+                                if self.selected_set.contains(&i) { self.selected_set.remove(&i); } else { self.selected_set.insert(i); }
+                                self.selected_event = Some(i);
+                                self.last_click_idx = Some(i);
+                                self.last_click_time = Some(now_click);
+                            }
+                        }
                     } else {
-                        let piece = if self.lane_mode { lane_piece.unwrap_or(self.selected_piece) } else { self.selected_piece };
-                        editor.push_event(NotatedEvent::new(
-                            DrumEvent::new(
-                                beat,
-                                piece,
-                                self.selected_velocity,
-                                DrumArticulation::Normal,
-                            ),
-                            Duration::milliseconds(500),
-                        ));
+                        // Clicked empty area in lane
+                        // If something is selected and no shift: clear selection instead of adding
+                        if !self.selected_set.is_empty() && !ui.input(|i| i.modifiers.shift) {
+                            self.selected_set.clear();
+                            self.selected_event = None;
+                            self.last_click_idx = None;
+                            self.last_click_time = None;
+                        } else {
+                            let piece = if self.lane_mode { lane_piece.unwrap_or(self.selected_piece) } else { self.selected_piece };
+                            let snapshot = editor.lesson().notation.clone();
+                            self.undo_stack.push(snapshot); self.redo_stack.clear();
+                            editor.push_event(NotatedEvent::new(
+                                DrumEvent::new(
+                                    beat,
+                                    piece,
+                                    self.selected_velocity,
+                                    DrumArticulation::Normal,
+                                ),
+                                Duration::milliseconds(500),
+                            ));
+                            self.last_click_idx = None;
+                            self.last_click_time = Some(now_click);
+                        }
                     }
                 }
 
                 // Drag to move selected
                 if self.drag_on_selected && response.dragged() {
+                    // on first drag, take snapshot
+                    if self.redo_stack.is_empty() {
+                        let snapshot = editor.lesson().notation.clone();
+                        self.undo_stack.push(snapshot); self.redo_stack.clear();
+                    }
                     if let Some(sel) = self.selected_event { if let Some(ev) = editor.lesson_mut().notation.get_mut(sel) { ev.event.beat = beat; } }
                 }
                 if response.drag_released() { self.drag_on_selected = false; }
+
+                // Marquee update
+                if self.marquee_active {
+                    if let Some(start) = self.marquee_start {
+                        let min = egui::pos2(start.x.min(pos.x), start.y.min(pos.y));
+                        let max = egui::pos2(start.x.max(pos.x), start.y.max(pos.y));
+                        let sel_rect = egui::Rect::from_min_max(min, max);
+                        // Compute note positions similar to lane drawing
+                        let lane_h = 26.0f32; let margin = 8.0f32; let top = rect.top() + margin; let left_c = left; let right_c = right;
+                        self.selected_set.clear();
+                        for (i, ev) in editor.lesson().notation.iter().enumerate() {
+                            let tt = ((ev.event.beat - self.view_start) / self.view_span).clamp(0.0, 1.0) as f32;
+                            let x = left_c + (right_c - left_c) * tt;
+                            if let Some(row) = studio_lanes().iter().position(|p| *p == ev.event.piece) {
+                                let y = top + row as f32 * lane_h + lane_h * 0.5;
+                                let p2 = egui::pos2(x, y);
+                                if sel_rect.contains(p2) { self.selected_set.insert(i); }
+                            }
+                        }
+                        // Draw overlay rectangle
+                        ui.painter().rect_stroke(sel_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(255,210,0)));
+                    }
+                    if response.drag_released() { self.marquee_active = false; self.marquee_start = None; }
+                }
                 }
             }
-            // Keyboard delete
-            if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) { if let Some(sel) = self.selected_event { if sel < editor.lesson().notation.len() { editor.lesson_mut().notation.remove(sel); self.selected_event = None; } } }
+            // Keyboard delete: delete selected set or single selected
+            if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+                if !self.selected_set.is_empty() {
+                    // Push undo and remove in descending index order to avoid reindex issues
+                    let snapshot = editor.lesson().notation.clone();
+                    self.undo_stack.push(snapshot); self.redo_stack.clear();
+                    // Remove in descending index order
+                    let mut idxs: Vec<_> = self.selected_set.iter().copied().collect();
+                    idxs.sort_unstable_by(|a,b| b.cmp(a));
+                    for i in idxs { if i < editor.lesson().notation.len() { editor.lesson_mut().notation.remove(i); } }
+                    self.selected_set.clear();
+                    self.selected_event = None;
+                } else if let Some(sel) = self.selected_event {
+                    let snapshot = editor.lesson().notation.clone();
+                    self.undo_stack.push(snapshot); self.redo_stack.clear();
+                    if sel < editor.lesson().notation.len() { editor.lesson_mut().notation.remove(sel); }
+                    self.selected_event = None;
+                }
+            }
         } else {
             ui.label("No transcription yet. Provide an audio path and press Transcribe.");
         }
@@ -589,10 +757,43 @@ impl ExtractorPane {
 
     fn quantize_selected(&mut self) {
         if let Some(editor) = &mut self.editor {
-            if let Some(sel) = self.selected_event { if let Some(ev) = editor.lesson_mut().notation.get_mut(sel) {
-                let step = 4.0_f64 / (self.snap_den as f64);
-                ev.event.beat = (ev.event.beat / step).round() * step;
-            }}
+            let step = 4.0_f64 / (self.snap_den as f64);
+            if !self.selected_set.is_empty() {
+                for i in self.selected_set.iter().copied().collect::<Vec<_>>() {
+                    if let Some(ev) = editor.lesson_mut().notation.get_mut(i) { ev.event.beat = (ev.event.beat / step).round() * step; }
+                }
+            } else if let Some(sel) = self.selected_event {
+                if let Some(ev) = editor.lesson_mut().notation.get_mut(sel) { ev.event.beat = (ev.event.beat / step).round() * step; }
+            }
+        }
+    }
+
+    fn push_undo(&mut self) {
+        if let Some(ed) = &self.editor {
+            self.undo_stack.push(ed.lesson().notation.clone());
+            self.redo_stack.clear();
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(ed) = &mut self.editor {
+            if let Some(prev) = self.undo_stack.pop() {
+                let current = std::mem::take(&mut ed.lesson_mut().notation);
+                ed.lesson_mut().notation = prev;
+                self.redo_stack.push(current);
+                self.selected_set.clear(); self.selected_event = None;
+            }
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(ed) = &mut self.editor {
+            if let Some(next) = self.redo_stack.pop() {
+                let current = std::mem::take(&mut ed.lesson_mut().notation);
+                ed.lesson_mut().notation = next;
+                self.undo_stack.push(current);
+                self.selected_set.clear(); self.selected_event = None;
+            }
         }
     }
 
@@ -1121,6 +1322,8 @@ fn draw_studio_lanes(
     span_beats: f64,
     playhead: Option<f64>,
     loop_region: Option<(f64, f64)>,
+    solo: &HashSet<DrumPiece>,
+    mute: &HashSet<DrumPiece>,
 ) -> egui::Response {
     let lanes = studio_lanes();
     let lane_h = 26.0f32;
@@ -1154,7 +1357,10 @@ fn draw_studio_lanes(
         let x = left + (right - left) * t;
         if let Some(row) = lanes.iter().position(|p| *p == ev.event.piece) {
             let y = top + row as f32 * lane_h + lane_h * 0.5;
-            painter.circle_filled(egui::pos2(x, y), 6.0, lane_color(ev.event.piece));
+            let mut c = lane_color(ev.event.piece);
+            let dim = (!solo.is_empty() && !solo.contains(&ev.event.piece)) || mute.contains(&ev.event.piece);
+            if dim { c = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 120); }
+            painter.circle_filled(egui::pos2(x, y), 6.0, c);
         }
     }
 
