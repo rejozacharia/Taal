@@ -13,3 +13,4 @@ serde_yaml.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 time = { version = "0.3", features = ["serde"] }
+quick-xml = "0.30"
