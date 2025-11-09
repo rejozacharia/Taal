@@ -30,7 +30,11 @@ Key modules:
 - `tempo`: tempo map representation, beat grids, and swing descriptors.
 - `events`: strongly typed drum events, velocities, articulations, and layout metadata.
 - `lesson`: lesson descriptors, progress metrics, and metadata for the tutoring UI.
-- `io`: MusicXML/MEI/MIDI import/export adapters using feature flags.
+- `io`: MusicXML/MEI/MIDI import/export adapters using feature flags. MusicXML importer supports:
+  - `<sound tempo>` and `<metronome><per-minute>` tempo sources.
+  - Layered notes via per‑voice cursors and `<chord/>` handling.
+  - Instrument detection from `<notations><technical><instrument>` with keyword mapping (snare, bass/kick, hi‑hat closed/open, crash, ride, tom high/mid/low/floor).
+  - Fallback heuristics when `<instrument>` is omitted: evaluate `<notehead>` (x‑head → cymbals), `<unpitched><display-step>/<display-octave>` to infer hats/crash/ride/kick/snare/toms. A weak per‑voice memory is used only if heuristics are unavailable.
 
 Dependencies:
 - `serde` with `serde_json` and `serde_yaml` for storage.

@@ -70,6 +70,16 @@ Each crate includes targeted unit tests. Execute `cargo test --workspace` for th
 
 See also: `docs/UX_OVERVIEW.md` for the short roadmap.
 
+## MusicXML Import
+
+- Import `.musicxml`/`.xml` drum charts in the Studio via “Import MusicXML”.
+- Handles multi‑voice layering and chords; reads tempo from `<sound tempo>` or `<metronome><per-minute>`.
+- Instrument mapping sources:
+  - Preferred: `<notations><technical><instrument>` text (e.g., “Hi-Hat Closed”, “Bass Drum”, “Crash Cymbal”, “High Tom”, “Mid Tom”).
+  - Fallback: heuristics from `<notehead>` and `<unpitched><display-step>/<display-octave>` (x‑head cymbals; F4≈Kick, C5≈Snare, E/D5≈Toms).
+- Supported pieces: Kick, Snare, Hi‑Hat (closed/open via `<open/>` articulation), Ride, Crash, High/Low/Floor Tom.
+- Tip: For best results, include `<instrument>` on first occurrence of each piece; the importer will still infer when omitted.
+
 ## What “Transcribe” Does Today
 
 The current transcriber is a functional prototype meant to validate data flow end‑to‑end:
