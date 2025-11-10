@@ -61,15 +61,16 @@ Each crate includes targeted unit tests. Execute `cargo test --workspace` for th
 
 ## What’s New in the UI
 
-- Studio: file picker for audio, “New Chart”, and “Load Sample”.
-- Basic editing: piece selection, click-to-add notes, right-click delete, selection + drag to move, snap-to-grid, and a waveform backdrop when an audio file is selected.
-- Transport: play/pause, BPM, loop in/out, visible playhead, and a simple metronome click.
-- Settings: MIDI device picker with refresh; audio device dropdown (placeholder if backend is unavailable), exclusive mode toggle, latency and volume sliders; test tone playback; high‑contrast theme toggle; visual MIDI mapping wizard (click a pad then hit your kit) with revert.
-- Practice: live MIDI input mapped via your kit profile; hits advance session.
-- Practice: per‑instrument "note highway" lanes (Crash/Ride/Hi‑Hat/Snare/Toms/Kick), moving playhead, and color-coded hit states (green on-time, blue early, orange late, red missed, gray not-yet-played). Includes Play/Pause, BPM control, optional “Use lesson tempo” (TempoMap), pre‑roll count‑in, and configurable hit windows.
+- Bottom transport docks (Studio & Practice): play/pause, integer BPM labels, loop toggle with Start/End, metronome gain as percentage. Studio adds Record MIDI.
+- Ruler A/B handles: draggable loop handles in the ruler (Studio live; Practice to follow), numeric A/B in the dock.
+- Mute/Solo pills per lane: horizontal pills in lane gutter, mutually exclusive per lane; global Solo dims others.
+- Light/High‑Contrast polish: higher contrast tracks and labels in Light; high‑contrast strengthens strokes for the active theme.
+- Countdown overlay: large centered numerals with soft circular background; counts in seconds (not BPM).
+- Review overlay: centered card, consistent instrument order, encouraging summary text.
+- Icons: Lucide SVGs tinted at runtime; see `docs/ASSETS.md` for exact list.
 
 ### Practice Settings
-- Configurable hit windows (percent of beat + ms caps), countdown behavior (first loop only vs every loop), default loop count, and default tempo scaling. See `docs/UX_OVERVIEW.md` and `docs/ARCHITECTURE.md`.
+- Configurable hit windows (percent of beat + ms caps), countdown behavior, “Test loops before review” (default 2), default tempo scaling, and pre‑roll beats. See `docs/UX_SPECS.md` and `docs/ARCHITECTURE.md`.
 
 See also: `docs/UX_OVERVIEW.md` for the short roadmap.
 
