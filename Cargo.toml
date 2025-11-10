@@ -6,6 +6,7 @@ members = [
     "crates/notation",
     "crates/tutor",
     "crates/services",
+    "crates/ui",
     "apps/desktop",
     "tools/dataset-pipeline",
 ]

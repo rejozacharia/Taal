@@ -65,9 +65,15 @@
 - Countdown behavior
   - First loop only (default) vs every loop.
 - Defaults
-  - Default loop count per session (default 2).
+  - Test loops before review (default 2) — controls how many times Test mode runs before showing the Review summary. Free Play always loops indefinitely.
   - Default tempo scaling for practice (e.g., start at 80%).
   - Pre‑roll bars (default 1 bar / 4 beats).
+
+### UI Theming & Assets (current)
+- Themes: Dark Neon (Studio) and Light Neumorphic (Practice); high‑contrast reinforces strokes for the active theme.
+- Icons: one monochrome SVG set tinted at runtime; see `docs/ASSETS.md` for an exact list by screen and sizing guidance.
+- Docks: a bottom transport dock consolidates transport controls; BPM shown as integer; gains/volumes shown as integer percents.
+- Looping UX: draggable A/B handles in the ruler; numeric fields live in the dock when Loop is enabled.
 
 ## Marketplace & Future Extensions
 - Start with local content packs authored by instructors.

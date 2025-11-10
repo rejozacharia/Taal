@@ -58,3 +58,10 @@
 
 4. Design Polish
    - Theming, spacing, and a more modern visual hierarchy in egui.
+   - See `docs/UI_DESIGN.md` for themes/tokens and `docs/UX_SPECS.md` for per‑screen component + behavior specs.
+
+## Visual Defaults (Decisions)
+
+- Font: Inter (Regular/Bold bundled); Rubik optional for marketing.
+- Icons: Lucide SVG set.
+- Themes: implement Dark Neon and Light Neumorphic first; Gradient Performance arrives in Phase 2.

@@ -21,6 +21,7 @@ symphonia = { version = "0.5", features = ["aac", "flac", "mp3", "vorbis", "wav"
 cpal.workspace = true
 midir.workspace = true
 dirs = "5"
+taal_ui = { path = "../../crates/ui" }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["winuser", "windef"] }
