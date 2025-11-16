@@ -19,6 +19,7 @@ struct Args {
     input: PathBuf,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct AnnotationRecord {
     piece: String,

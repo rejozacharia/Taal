@@ -3,6 +3,7 @@
 This document describes the macro UX for the three primary screens — Studio, Practice, and Settings — with a component catalog for each: layout, appearance, states, interactions, and motion. It serves as the single source of truth for coordination across design and implementation.
 
 Refer to `docs/UI_DESIGN.md` for theme tokens, fonts, icons, and motion primitives used here.
+See also `docs/DESIGN_PHILOSOPHY.md` for cross-screen principles and accent/motion conventions.
 
 ---
 
@@ -17,6 +18,10 @@ Refer to `docs/UI_DESIGN.md` for theme tokens, fonts, icons, and motion primitiv
 - Drawers: contextual tools/inspector appear as collapsible side panels; hidden by default.
 - Themes: Dark Neon (Studio) and Light Neumorphic (Practice). Gradient Performance is Phase 2.
 - Icons: Lucide; font: Inter.
+- Icon color & slider fill:
+  - Dark (Studio): icons and slider fills use Neon Blue (#00B4FF) for high contrast.
+  - Light (Practice): icons and slider fills use Cool Blue (#2B86FF) for clarity; hover warms slightly.
+  - Accent is user-selectable (Blue/Orange/Green/Neon Pink); icons and selection highlights follow the accent.
 
 Motion guidelines: all animations ≤ 200 ms, ease-out; gated by Reduced Motion.
 
@@ -66,10 +71,11 @@ Motion guidelines: all animations ≤ 200 ms, ease-out; gated by Reduced Motion.
   - Loop A/B handles are draggable in the ruler; numeric A/B are editable in the dock when Loop is enabled.
 
 ### Motion
-- Transport controls scale 1.03 on press.
+- Transport controls scale 1.03 on press; icon hover brightens slightly.
 - Record state adds a 2 px orange top border to the app bar.
 - Optional pre‑light band ahead of playhead (100 ms) can be enabled from Settings → Appearance.
 - Loop handles breathe subtly (disabled when Reduced Motion is on).
+ - Playhead glow (Practice): optional, off by default; soft outer glow around the playhead using the accent color.
 
 ---
 
@@ -104,8 +110,9 @@ Motion guidelines: all animations ≤ 200 ms, ease-out; gated by Reduced Motion.
   - Test loops: configurable (Settings → Practice “Test loops before review”, default 2). Free Play loops indefinitely.
 
 ### Motion
-- Hit Ripple: 120–180 ms ring on hit lane (accent warm); gated by Reduced Motion.
-- Downbeat emphasis: ruler tick at bar start is thicker only; no pulses in the grid.
+- Hit Ripple: 120–180 ms ring on hit lane (accent); gated by Reduced Motion.
+- Progressive judgments: color-in with 120–160 ms ease-out; optional directional nudge for early/late.
+- Downbeat emphasis: ruler tick at bar start is thicker only; no pulses in the grid (optional glow toggle under Appearance).
 - Score reveal: slide‑up review card at end of Test.
 
 ---
@@ -118,7 +125,7 @@ Motion guidelines: all animations ≤ 200 ms, ease-out; gated by Reduced Motion.
   - Audio: device, latency, volume, exclusive mode, test tone, calibration.
   - MIDI: input selection, mapping wizard launcher, reset mappings.
   - Practice: hit windows, caps, countdown, loop defaults, tempo scaling.
-  - Appearance: theme, reduced motion, high contrast, app sounds, auto‑preview.
+  - Appearance: theme & accent, surfaces (glass), display & motion (playhead glow, reduced motion, high contrast), sound & behavior (app sounds, auto‑preview, streaks, experiments).
   - Accessibility: font scaling and colorblind palettes (roadmap).
 
 ### Appearance

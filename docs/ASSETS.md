@@ -16,6 +16,8 @@ Integration notes
 - The examples in `docs/UI_DESIGN.md` use `include_bytes!` with these relative paths from a UI crate/module.
 - For runtime loading (optional), mirror the same structure and provide a configuration knob.
 - Dark/Light: one SVG set is sufficient. Icons are tinted at runtime based on theme and state (default/hover/active/disabled). Avoid baking colors into SVGs unless brand requires it.
+- Accent color: icons follow the app accent (Settings → Appearance) via `visuals.selection.bg_fill`.
+- Loader aliasing: the runtime loader supports renamed Lucide glyphs. For example: `waveform` → `audio-waveform`, `export` → `share`, `record` → `circle-dot`, `metronome` → `timer`, `sliders` → `sliders-horizontal`, `help-circle` → `circle-question-mark`, `alert-triangle` → `triangle-alert`.
 
 ## Exact Icon List (initial)
 
@@ -61,8 +63,9 @@ Legend: path `assets/icons/lucide/<name>.svg` • [Screen] usage • Notes/toolt
 - Optional raster fallbacks: export PNG at 1.0× (24), 1.5× (36), 2.0× (48), 3.0× (72) if needed by a platform.
 
 ## Tint/States (runtime)
-- Default: theme text_secondary; Hover: accent (Blue in Dark, Orange in Light); Active: accent × 1.1; Disabled: text_muted × 0.6.
+- Default: Dark = Neon Blue `#00B4FF`, Light = Cool Blue `#2B86FF`; Hover: brighten ×1.1; Active: brighten ×1.2; Disabled: `text_muted × 0.6`.
 - Use `ImageButton::new((tex, size)).tint(color)` or apply tint to `Image` next to a `SelectableLabel`.
+- In code, `taal_ui::icons::default_tint(ui)` picks a readable default for Dark/Light.
 
 ```text
 assets/
