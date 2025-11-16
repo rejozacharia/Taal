@@ -62,7 +62,7 @@ Each crate includes targeted unit tests. Execute `cargo test --workspace` for th
 ## What’s New in the UI
 
 - Bottom transport docks (Studio & Practice): play/pause, integer BPM labels, loop toggle with Start/End, metronome gain as percentage. Studio adds Record MIDI.
-- Ruler A/B handles: draggable loop handles in the ruler (Studio live; Practice to follow), numeric A/B in the dock.
+- Ruler A/B handles: draggable loop handles in the ruler (Studio and Practice), numeric A/B in the dock.
 - Mute/Solo pills per lane: horizontal pills in lane gutter, mutually exclusive per lane; global Solo dims others.
 - Light/High‑Contrast polish: higher contrast tracks and labels in Light; high‑contrast strengthens strokes for the active theme.
 - Countdown overlay: large centered numerals with soft circular background; counts in seconds (not BPM).

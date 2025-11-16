@@ -82,25 +82,34 @@ impl eframe::App for DesktopApp {
             ui.painter().rect_filled(egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), rect.top()+8.0)), 0.0, grad_top);
             ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom()-8.0), rect.right_bottom()), 0.0, grad_bot);
 
-            // Tabs with optional icons + animated underline
+            // Tabs with icon + label and animated underline; icons tinted for contrast and animated on hover
             ui.horizontal(|ui| {
+                let tint = icons::default_tint(ui);
                 let mut active_rect = None;
                 let mut render_tab = |ui: &mut egui::Ui, target: ActiveTab, label: &str, icon: &str| {
-                    let tex = icons::icon_tex(ui.ctx(), icon);
-                    let resp = if let Some(id) = tex {
-                        ui.add(egui::Button::image_and_text((id, egui::vec2(16.0,16.0)), label))
-                    } else {
-                        ui.selectable_label(self.active_tab == target, label)
-                    };
-                    if resp.clicked() { self.active_tab = target; }
-                    if self.active_tab == target { active_rect = Some(resp.rect); }
+                    let mut r = egui::Rect::NAN;
+                    ui.horizontal(|ui| {
+                        if let Some(id) = icons::icon_tex(ui.ctx(), icon) {
+                            let resp_icon = ui.add(egui::ImageButton::new((id, egui::vec2(16.0,16.0))).tint(tint));
+                            // Hover/press animation: brighten + slight scale
+                            let scaled = icons::hover_scale(ui, resp_icon.hovered(), resp_icon.is_pointer_button_down_on(), &format!("tab:{}:icon", label), 1.06);
+                            let tint2 = icons::hover_tint(ui, tint, resp_icon.hovered(), resp_icon.is_pointer_button_down_on(), &format!("tab:{}:tint", label));
+                            let _ = ui.put(resp_icon.rect, egui::Image::new((id, egui::vec2(16.0*scaled, 16.0*scaled))).tint(tint2));
+                            r = r.union(resp_icon.rect);
+                            if resp_icon.clicked() { self.active_tab = target; }
+                        }
+                        let resp_lbl = ui.selectable_label(self.active_tab == target, label);
+                        r = if r.is_finite() { r.union(resp_lbl.rect) } else { resp_lbl.rect };
+                        if resp_lbl.clicked() { self.active_tab = target; }
+                    });
+                    if self.active_tab == target { active_rect = Some(r); }
                 };
                 render_tab(ui, ActiveTab::Extractor, "Studio", "sliders");
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 render_tab(ui, ActiveTab::Tutor, "Practice", "drum");
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 render_tab(ui, ActiveTab::Marketplace, "Marketplace", "shopping-cart");
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 render_tab(ui, ActiveTab::Settings, "Settings", "settings");
                 if let Some(r) = active_rect {
                     let accent = if ui.visuals().dark_mode { egui::Color32::from_rgb(0,180,255) } else { egui::Color32::from_rgb(255,140,66) };
@@ -114,6 +123,17 @@ impl eframe::App for DesktopApp {
 
         match self.active_tab {
             ActiveTab::Extractor => {
+                // Studio drawers
+                egui::SidePanel::left("studio_tools").default_width(260.0).resizable(false).show(ctx, |ui| {
+                    ui.heading("Tools");
+                    ui.add_space(6.0);
+                    self.extractor.ui_tools(ui);
+                });
+                egui::SidePanel::right("studio_inspector").default_width(260.0).resizable(false).show(ctx, |ui| {
+                    ui.heading("Inspector");
+                    ui.add_space(6.0);
+                    self.extractor.ui_inspector(ui, &mut self.settings);
+                });
                 egui::CentralPanel::default().show(ctx, |ui| {
                     self.extractor.ui(ui, &mut self.tutor, &mut self.settings);
                 });
@@ -252,6 +272,54 @@ impl ExtractorPane {
         }
     }
 
+    fn ui_tools(&mut self, ui: &mut Ui) {
+        ui.label("Piece").on_hover_text("Select drum piece for new notes");
+        egui::ComboBox::from_id_source("piece_select")
+            .selected_text(format!("{:?}", self.selected_piece))
+            .show_ui(ui, |ui| {
+                for piece in [
+                    DrumPiece::Bass,
+                    DrumPiece::Snare,
+                    DrumPiece::HiHatClosed,
+                    DrumPiece::HiHatOpen,
+                    DrumPiece::Ride,
+                    DrumPiece::Crash,
+                    DrumPiece::HighTom,
+                    DrumPiece::LowTom,
+                    DrumPiece::FloorTom,
+                    DrumPiece::CrossStick,
+                ] { ui.selectable_value(&mut self.selected_piece, piece, format!("{:?}", piece)); }
+            });
+        ui.add_space(8.0);
+        ui.label("Velocity").on_hover_text("MIDI velocity (1–127) for new notes");
+        ui.add(egui::Slider::new(&mut self.selected_velocity, 1..=127));
+        ui.add_space(8.0);
+        ui.label("Grid beats").on_hover_text("Total beats in chart timeline");
+        ui.add(egui::Slider::new(&mut self.grid_total_beats, 4.0..=256.0).logarithmic(true));
+        ui.add_space(8.0);
+        ui.label("Snap").on_hover_text("Note placement grid resolution");
+        egui::ComboBox::from_id_source("snap_select")
+            .selected_text(format!("1/{}", self.snap_den))
+            .show_ui(ui, |ui| {
+                for d in [4_u32, 8, 16, 32] { ui.selectable_value(&mut self.snap_den, d, format!("1/{}", d)); }
+            });
+        ui.add_space(8.0);
+        ui.toggle_value(&mut self.lane_mode, "Lane editor").on_hover_text("Compose per instrument in lanes (Snare first)");
+    }
+
+    fn ui_inspector(&mut self, ui: &mut Ui, _settings: &mut SettingsPane) {
+        ui.horizontal(|ui| {
+            if ui.button("Quantize sel").on_hover_text("Quantize selected notes to current snap").clicked() { self.quantize_selected(); }
+            if ui.button("Quantize all").on_hover_text("Quantize all notes to current snap").clicked() { self.status_message = Some("__DO_QUANTIZE_ALL__".into()); }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Undo").on_hover_text("Undo last change (Ctrl+Z)").clicked() { self.undo(); }
+            if ui.button("Redo").on_hover_text("Redo (Ctrl+Shift+Z)").clicked() { self.redo(); }
+        });
+        // Selection details could go here later
+    }
+
     fn create_new_chart(&mut self) {
         let tempo = TempoMap::constant(120.0).unwrap();
         let lesson = LessonDescriptor::new("new","Untitled Chart","",1,tempo,vec![]);
@@ -298,9 +366,14 @@ impl ExtractorPane {
     fn transport_ui(&mut self, ui: &mut Ui, settings: &mut SettingsPane) {
         egui::Frame::none().inner_margin(egui::Margin::symmetric(12.0, 8.0)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                // Play/Pause with icon
+                let tint = icons::default_tint(ui);
+                // Play/Pause with icon + hover animation
                 if let Some(tex) = icons::icon_tex(ui.ctx(), if self.playing { "pause" } else { "play" }) {
-                    if ui.add(egui::Button::image((tex, egui::vec2(16.0,16.0)))).on_hover_text("Start/stop preview").clicked() {
+                    let resp = ui.add(egui::ImageButton::new((tex, egui::vec2(16.0,16.0))).tint(tint)).on_hover_text("Start/stop preview");
+                    let size = 16.0 * icons::hover_scale(ui, resp.hovered(), resp.is_pointer_button_down_on(), "studio:play", 1.08);
+                    let tint2 = icons::hover_tint(ui, tint, resp.hovered(), resp.is_pointer_button_down_on(), "studio:play");
+                    let _ = ui.put(resp.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                    if resp.clicked() {
                         self.playing = !self.playing;
                         if self.playing { self.last_tick = Some(std::time::Instant::now()); self.next_click_beat = self.playhead.ceil(); }
                     }
@@ -317,7 +390,7 @@ impl ExtractorPane {
                 // Loop toggle with icon
                 if let Some(tex) = icons::icon_tex(ui.ctx(), "repeat") {
                     if ui.add(egui::SelectableLabel::new(self.loop_enabled, "")).on_hover_text("Loop between Start and End beats").clicked() { self.loop_enabled = !self.loop_enabled; }
-                    ui.add(egui::Image::new((tex, egui::vec2(16.0,16.0))));
+                    ui.add(egui::Image::new((tex, egui::vec2(16.0,16.0))).tint(tint));
                 } else { ui.toggle_value(&mut self.loop_enabled, "Loop"); }
                 ui.label("Start"); ui.add(egui::DragValue::new(&mut self.loop_start).speed(0.1));
                 ui.label("End"); ui.add(egui::DragValue::new(&mut self.loop_end).speed(0.1));
@@ -325,11 +398,21 @@ impl ExtractorPane {
                 ui.separator();
                 // Record icon toggle
                 if let Some(tex) = icons::icon_tex(ui.ctx(), "record") {
-                    if ui.add(egui::SelectableLabel::new(self.record_enabled, "")).on_hover_text("Record MIDI").clicked() { self.record_enabled = !self.record_enabled; }
-                    ui.add(egui::Image::new((tex, egui::vec2(14.0,14.0))));
+                    let resp = ui.add(egui::ImageButton::new((tex, egui::vec2(16.0,16.0))).tint(if self.record_enabled { tint } else { ui.visuals().widgets.noninteractive.weak_bg_fill }))
+                        .on_hover_text("Record MIDI");
+                    let size = 16.0 * icons::hover_scale(ui, resp.hovered(), resp.is_pointer_button_down_on(), "studio:record", 1.08);
+                    let tint2 = if self.record_enabled { icons::hover_tint(ui, tint, resp.hovered(), resp.is_pointer_button_down_on(), "studio:record") } else { ui.visuals().widgets.noninteractive.weak_bg_fill };
+                    let _ = ui.put(resp.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                    if resp.clicked() { self.record_enabled = !self.record_enabled; }
                 } else { ui.toggle_value(&mut self.record_enabled, "Record MIDI"); }
                 ui.separator();
-                ui.toggle_value(&mut settings.metronome_enabled, "Metronome");
+                if let Some(tex) = icons::icon_tex(ui.ctx(), "metronome") {
+                    let enabled = settings.metronome_enabled;
+                    let resp = ui.add(egui::ImageButton::new((tex, egui::vec2(16.0,16.0))).tint(if enabled { tint } else { ui.visuals().widgets.noninteractive.weak_bg_fill })).on_hover_text("Metronome");
+                    if resp.clicked() { settings.metronome_enabled = !settings.metronome_enabled; }
+                } else {
+                    ui.toggle_value(&mut settings.metronome_enabled, "Metronome");
+                }
                 ui.add(egui::Slider::new(&mut settings.metronome_gain, 0.0..=1.0).show_value(false));
                 ui.label(format!("{}%", (settings.metronome_gain*100.0).round() as i32));
             });
@@ -362,27 +445,48 @@ impl ExtractorPane {
             }
             ui.add_space(12.0);
             ui.group(|ui| {
+                let tint = icons::default_tint(ui);
                 ui.horizontal(|ui| {
                     // New Chart
                     if let Some(tex) = icons::icon_tex(ui.ctx(), "file-plus") {
-                        if ui.add(egui::Button::image_and_text((tex, egui::vec2(16.0,16.0)), "New")).clicked() { self.create_new_chart(); }
+                        let b = ui.add(egui::ImageButton::new((tex, egui::vec2(18.0,18.0))).tint(tint)).on_hover_text("New chart");
+                        let size = 18.0 * icons::hover_scale(ui, b.hovered(), b.is_pointer_button_down_on(), "toolbar:new", 1.08);
+                        let tint2 = icons::hover_tint(ui, tint, b.hovered(), b.is_pointer_button_down_on(), "toolbar:new");
+                        let _ = ui.put(b.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                        if b.clicked() { self.create_new_chart(); }
+                        ui.label("New");
                     } else { if ui.button("New").clicked() { self.create_new_chart(); } }
-                    ui.add_space(6.0);
+                    ui.add_space(10.0);
                     // Load Sample
                     if let Some(tex) = icons::icon_tex(ui.ctx(), "music") {
-                        if ui.add(egui::Button::image_and_text((tex, egui::vec2(16.0,16.0)), "Sample")).clicked() { self.load_sample(); }
+                        let b = ui.add(egui::ImageButton::new((tex, egui::vec2(18.0,18.0))).tint(tint)).on_hover_text("Load sample groove");
+                        let size = 18.0 * icons::hover_scale(ui, b.hovered(), b.is_pointer_button_down_on(), "toolbar:sample", 1.08);
+                        let tint2 = icons::hover_tint(ui, tint, b.hovered(), b.is_pointer_button_down_on(), "toolbar:sample");
+                        let _ = ui.put(b.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                        if b.clicked() { self.load_sample(); }
+                        ui.label("Sample");
                     } else { if ui.button("Sample").clicked() { self.load_sample(); } }
-                    ui.add_space(6.0);
+                    ui.add_space(10.0);
                     // Open Chart
                     if let Some(tex) = icons::icon_tex(ui.ctx(), "folder-open") {
-                        if ui.add(egui::Button::image_and_text((tex, egui::vec2(16.0,16.0)), "Open")).clicked() { self.open_chart(); }
+                        let b = ui.add(egui::ImageButton::new((tex, egui::vec2(18.0,18.0))).tint(tint)).on_hover_text("Open chart");
+                        let size = 18.0 * icons::hover_scale(ui, b.hovered(), b.is_pointer_button_down_on(), "toolbar:open", 1.08);
+                        let tint2 = icons::hover_tint(ui, tint, b.hovered(), b.is_pointer_button_down_on(), "toolbar:open");
+                        let _ = ui.put(b.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                        if b.clicked() { self.open_chart(); }
+                        ui.label("Open");
                     } else { if ui.button("Open").clicked() { self.open_chart(); } }
-                    ui.add_space(6.0);
+                    ui.add_space(10.0);
                     // Transcribe
                     if let Some(tex) = icons::icon_tex(ui.ctx(), "waveform") {
-                        if ui.add(egui::Button::image_and_text((tex, egui::vec2(16.0,16.0)), "Transcribe")).clicked() { self.start_transcribe(tutor); }
+                        let b = ui.add(egui::ImageButton::new((tex, egui::vec2(18.0,18.0))).tint(tint)).on_hover_text("Transcribe audio to chart");
+                        let size = 18.0 * icons::hover_scale(ui, b.hovered(), b.is_pointer_button_down_on(), "toolbar:transcribe", 1.08);
+                        let tint2 = icons::hover_tint(ui, tint, b.hovered(), b.is_pointer_button_down_on(), "toolbar:transcribe");
+                        let _ = ui.put(b.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                        if b.clicked() { self.start_transcribe(tutor); }
+                        ui.label("Transcribe");
                     } else { if ui.button("Transcribe").clicked() { self.start_transcribe(tutor); } }
-                    ui.add_space(6.0);
+                    ui.add_space(10.0);
                     // Save / Export dropdown
                     ui.menu_button("Save/Export ▾", |ui| {
                         if ui.button("Save JSON…").clicked() {
@@ -448,58 +552,7 @@ impl ExtractorPane {
         if let Some(message) = &self.status_message {
             ui.label(message);
         }
-        ui.separator();
-        // Creation tools
-        ui.collapsing("Editor Tools", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Piece:").on_hover_text("Select drum piece for new notes");
-                egui::ComboBox::from_id_source("piece_select")
-                    .selected_text(format!("{:?}", self.selected_piece))
-                    .show_ui(ui, |ui| {
-                        for piece in [
-                            DrumPiece::Bass,
-                            DrumPiece::Snare,
-                            DrumPiece::HiHatClosed,
-                            DrumPiece::HiHatOpen,
-                            DrumPiece::Ride,
-                            DrumPiece::Crash,
-                            DrumPiece::HighTom,
-                            DrumPiece::LowTom,
-                            DrumPiece::FloorTom,
-                            DrumPiece::CrossStick,
-                        ] {
-                            ui.selectable_value(&mut self.selected_piece, piece, format!("{:?}", piece));
-                        }
-                    });
-                ui.label("Velocity:").on_hover_text("MIDI velocity (1-127) for new notes");
-                ui.add(egui::Slider::new(&mut self.selected_velocity, 1..=127));
-                ui.label("Grid beats:").on_hover_text("Total beats in chart timeline");
-                ui.add(egui::Slider::new(&mut self.grid_total_beats, 4.0..=256.0).logarithmic(true));
-                ui.label("Snap:").on_hover_text("Note placement grid resolution");
-                egui::ComboBox::from_id_source("snap_select")
-                    .selected_text(format!("1/{}", self.snap_den))
-                    .show_ui(ui, |ui| {
-                        for d in [4_u32, 8, 16, 32] {
-                            ui.selectable_value(&mut self.snap_den, d, format!("1/{}", d));
-                        }
-                    });
-            });
-            // Lane Mute/Solo controls have moved into lane labels in the canvas.
-            ui.separator();
-            // Transport moved to bottom dock. Keep quantize/undo here until Inspector drawer is added.
-            ui.horizontal(|ui| {
-                if ui.button("Quantize sel").on_hover_text("Quantize selected notes to current snap").clicked() { self.quantize_selected(); }
-                if ui.button("Quantize all").on_hover_text("Quantize all notes to current snap").clicked() {
-                    // avoid borrow conflict by taking editor mutably after this UI block
-                    self.status_message = Some("__DO_QUANTIZE_ALL__".into());
-                }
-                ui.separator();
-                if ui.button("Undo").on_hover_text("Undo last change (Ctrl+Z)").clicked() { self.undo(); }
-                if ui.button("Redo").on_hover_text("Redo (Ctrl+Shift+Z)").clicked() { self.redo(); }
-                ui.separator();
-                ui.checkbox(&mut self.lane_mode, "Lane editor").on_hover_text("Compose per instrument in lanes (Snare first)");
-            });
-        });
+        // (Editor Tools moved to left/right drawers)
 
         // Live MIDI record: pre-collect any hits to insert to avoid borrow conflicts
         let mut recorded: Vec<NotatedEvent> = Vec::new();
@@ -1041,6 +1094,7 @@ struct TutorPane {
     loop_use_region: bool,
     loop_a: f64,
     loop_b: f64,
+    drag_handle: Option<LoopHandle>,
     // Review
     review_active: bool,
     bpm_initialized_from_settings: bool,
@@ -1085,6 +1139,7 @@ impl TutorPane {
             loop_use_region: false,
             loop_a: 0.0,
             loop_b: 0.0,
+            drag_handle: None,
             review_active: false,
             bpm_initialized_from_settings: false,
             ripples: Vec::new(),
@@ -1286,7 +1341,41 @@ impl TutorPane {
             let window_span = 8.0f64;
             let start = if self.freeze_playhead { self.playhead - window_span * 0.5 } else { self.playhead - 2.0 };
             let loop_region = if self.loop_use_region { Some((self.loop_a.min(self.loop_b), self.loop_b.max(self.loop_a))) } else { None };
-            draw_highway(ui, &session.lesson, self.playhead, &self.statuses, start, window_span, self.freeze_playhead, loop_region, Some(&mut self.ripples), settings.reduced_motion);
+            let rect = draw_highway(ui, &session.lesson, self.playhead, &self.statuses, start, window_span, self.freeze_playhead, loop_region, Some(&mut self.ripples), settings.reduced_motion, settings.playhead_glow);
+            // A/B loop handles in Practice ruler (mirror Studio behavior)
+            if self.loop_use_region {
+                let margin = 8.0f32; let top = rect.top() + margin;
+                let left = rect.left() + 120.0; let right = rect.right() - 10.0; // match draw_highway layout
+                let width = (right - left).max(1.0);
+                let to_x = |beat: f64| left + width * (((beat - start) / window_span).clamp(0.0, 1.0) as f32);
+                let from_x = |x: f32| {
+                    let t = ((x - left) / width).clamp(0.0, 1.0) as f64;
+                    start + t * window_span
+                };
+                let x0 = to_x(self.loop_a.min(self.loop_b)); let x1 = to_x(self.loop_b.max(self.loop_a));
+                let handle_sz = egui::vec2(10.0, 14.0);
+                let r0 = egui::Rect::from_min_size(egui::pos2(x0 - 5.0, top - handle_sz.y - 2.0), handle_sz);
+                let r1 = egui::Rect::from_min_size(egui::pos2(x1 - 5.0, top - handle_sz.y - 2.0), handle_sz);
+                ui.painter().rect_filled(r0, 2.0, egui::Color32::from_rgb(60,130,255));
+                ui.painter().rect_filled(r1, 2.0, egui::Color32::from_rgb(60,130,255));
+                let h0 = ui.interact(r0, egui::Id::new("practice_loop_handle_start"), egui::Sense::click_and_drag());
+                let h1 = ui.interact(r1, egui::Id::new("practice_loop_handle_end"), egui::Sense::click_and_drag());
+                if h0.drag_started() { self.drag_handle = Some(LoopHandle::Start); }
+                if h1.drag_started() { self.drag_handle = Some(LoopHandle::End); }
+                if let Some(handle) = self.drag_handle {
+                    if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+                        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                            match handle {
+                                LoopHandle::Start => { self.loop_a = from_x(pos.x); }
+                                LoopHandle::End => { self.loop_b = from_x(pos.x); }
+                            }
+                        }
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.drag_handle = None;
+                    }
+                }
+            }
             // Countdown overlay during pre-roll (big number + soft background)
             if self.pre_roll_active {
                 let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tutor_pre_roll")));
@@ -1453,7 +1542,24 @@ impl TutorPane {
     fn transport_ui(&mut self, ui: &mut Ui, settings: &mut SettingsPane) {
         egui::Frame::none().inner_margin(egui::Margin::symmetric(12.0, 8.0)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.button(if self.playing {"Pause"} else {"Play"}).clicked() {
+                let tint = icons::default_tint(ui);
+                if let Some(tex) = icons::icon_tex(ui.ctx(), if self.playing { "pause" } else { "play" }) {
+                    let resp = ui.add(egui::ImageButton::new((tex, egui::vec2(16.0,16.0))).tint(tint)).on_hover_text("Play/Pause");
+                    let size = 16.0 * icons::hover_scale(ui, resp.hovered(), resp.is_pointer_button_down_on(), "practice:play", 1.08);
+                    let tint2 = icons::hover_tint(ui, tint, resp.hovered(), resp.is_pointer_button_down_on(), "practice:play");
+                    let _ = ui.put(resp.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                    if resp.clicked() {
+                        self.playing = !self.playing;
+                        if self.playing {
+                            self.last_tick = Some(std::time::Instant::now());
+                            self.pre_roll_active = true;
+                            self.pre_roll_beats = settings.tutor_pre_roll_beats;
+                            self.pre_roll_remaining = self.pre_roll_beats as f64;
+                            self.next_click_beat = 0.0;
+                            self.loops_done = 0;
+                        }
+                    }
+                } else if ui.button(if self.playing {"Pause"} else {"Play"}).clicked() {
                     self.playing = !self.playing;
                     if self.playing {
                         self.last_tick = Some(std::time::Instant::now());
@@ -1471,7 +1577,17 @@ impl TutorPane {
                 ui.add_enabled(!settings.tutor_use_lesson_tempo, egui::Slider::new(&mut self.bpm, 40.0..=240.0).show_value(false));
                 ui.label(format!("{}", self.bpm.round() as i32));
                 ui.separator();
-                ui.toggle_value(&mut settings.metronome_enabled, "Metronome");
+                if let Some(tex) = icons::icon_tex(ui.ctx(), "metronome") {
+                    let enabled = settings.metronome_enabled;
+                    let resp = ui.add(egui::ImageButton::new((tex, egui::vec2(16.0,16.0))).tint(if enabled { tint } else { ui.visuals().widgets.noninteractive.weak_bg_fill })).on_hover_text("Metronome");
+                    let size = 16.0 * icons::hover_scale(ui, resp.hovered(), resp.is_pointer_button_down_on(), "studio:metronome", 1.08);
+                    let base = if enabled { tint } else { ui.visuals().widgets.noninteractive.weak_bg_fill };
+                    let tint2 = icons::hover_tint(ui, base, resp.hovered(), resp.is_pointer_button_down_on(), "studio:metronome");
+                    let _ = ui.put(resp.rect, egui::Image::new((tex, egui::vec2(size,size))).tint(tint2));
+                    if resp.clicked() { settings.metronome_enabled = !settings.metronome_enabled; settings.mark_dirty(); }
+                } else {
+                    ui.toggle_value(&mut settings.metronome_enabled, "Metronome");
+                }
                 ui.add(egui::Slider::new(&mut settings.metronome_gain, 0.0..=1.0).show_value(false));
                 ui.label(format!("{}%", (settings.metronome_gain*100.0).round() as i32));
                 ui.separator();
@@ -1568,7 +1684,7 @@ impl TutorPane {
 
 }
 
-fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses: &[Option<HitLabel>], start: f64, window_span: f64, _freeze_playhead: bool, loop_region: Option<(f64,f64)>, fx: Option<&mut Vec<Ripple>>, reduced_motion: bool) {
+fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses: &[Option<HitLabel>], start: f64, window_span: f64, _freeze_playhead: bool, loop_region: Option<(f64,f64)>, fx: Option<&mut Vec<Ripple>>, reduced_motion: bool, playhead_glow: bool) -> egui::Rect {
     let lanes = ordered_lanes();
         let lane_h = 28.0f32;
         let margin = 8.0f32;
@@ -1653,8 +1769,16 @@ fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses:
 
         // Playhead glow + line
         let x = to_x(playhead);
-        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 210, 0)));
-        // No glow or ring; keep the line calm and precise.
+        // Base line uses accent color for consistency
+        let accent = ui.visuals().selection.bg_fill;
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(2.0, accent));
+        // Optional soft glow
+        if playhead_glow && !reduced_motion {
+            let c1 = accent.linear_multiply(0.25);
+            let c2 = accent.linear_multiply(0.12);
+            painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(6.0, c1));
+            painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(10.0, c2));
+        }
 
         // Hit ripples
         if let Some(rips) = fx {
@@ -1677,6 +1801,7 @@ fn draw_highway(ui: &mut Ui, lesson: &LessonDescriptor, playhead: f64, statuses:
                 rips.clear();
             }
         }
+        rect
 }
 
 fn legend_dot(ui: &mut Ui, color: egui::Color32, label: &str) {
@@ -1863,6 +1988,10 @@ struct SettingsPane {
     // Appearance
     ui_theme: ui_theme::ThemeMode,
     reduced_motion: bool,
+    // Accent & glass
+    accent_choice: AccentChoice,
+    glass_mode: bool,
+    playhead_glow: bool,
     // fonts are ensured per-frame via ui_theme::ensure_inter
     // Settings UI
     section: SettingsSection,
@@ -1921,6 +2050,9 @@ impl SettingsPane {
             new_keys_exp: true,
             ui_theme: ui_theme::ThemeMode::DarkNeon,
             reduced_motion: false,
+            accent_choice: AccentChoice::Blue,
+            glass_mode: false,
+            playhead_glow: false,
             section: SettingsSection::Audio,
             midi_inputs: Vec::new(),
             selected_midi: None,
@@ -2029,7 +2161,7 @@ impl SettingsPane {
                     SettingsSection::Audio => self.ui_audio_card(ui),
                     SettingsSection::Midi => self.ui_midi_card(ui),
                     SettingsSection::Practice => self.ui_practice_card(ui),
-                    SettingsSection::Appearance => self.ui_appearance_card(ui),
+                    SettingsSection::Appearance => { self.ui_appearance_card(ui); ui.add_space(10.0); self.ui_display_motion_card(ui); ui.add_space(10.0); self.ui_options_card(ui); },
                     SettingsSection::Accessibility => self.ui_accessibility_card(ui),
                 }
             });
@@ -2179,12 +2311,58 @@ impl SettingsPane {
                     ui.selectable_value(&mut self.ui_theme, ui_theme::ThemeMode::LightNeumorphic, "Light (Practice)");
                 });
                 ui.add_space(8.0);
+                // Accent swatches + custom picker
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Accent:");
+                    ui.selectable_value(&mut self.accent_choice, AccentChoice::Blue, "Blue");
+                    ui.selectable_value(&mut self.accent_choice, AccentChoice::Orange, "Orange");
+                    ui.selectable_value(&mut self.accent_choice, AccentChoice::Green, "Green");
+                    ui.selectable_value(&mut self.accent_choice, AccentChoice::Pink, "Neon Pink");
+                    ui.selectable_value(&mut self.accent_choice, AccentChoice::Purple, "Neon Purple");
+                    // Custom color picker
+                    let mut custom = match self.accent_choice { AccentChoice::Custom(c) => c, _ => self.accent_choice.color() };
+                    if ui.add(egui::Button::new("Custom…")).on_hover_text("Pick a custom accent color").clicked() {
+                        // no-op: color button below opens the picker
+                    }
+                    if egui::color_picker::color_edit_button_srgba(ui, &mut custom, egui::color_picker::Alpha::Opaque).changed() {
+                        self.accent_choice = AccentChoice::Custom(custom);
+                    }
+                });
+                ui.add_space(8.0);
+                // Surfaces
+                ui.heading("Surfaces");
+                ui.add_space(6.0);
+                ui.toggle_value(&mut self.glass_mode, "Glass surfaces (Dark only)")
+                    .on_hover_text("Make panels slightly translucent for a DAW-like look");
+            });
+    }
+
+    fn ui_display_motion_card(&mut self, ui: &mut Ui) {
+        let t = ui_theme::theme(self.ui_theme).tokens;
+        egui::Frame::group(ui.style())
+            .fill(t.neutral_surface)
+            .rounding(egui::Rounding::same(8.0))
+            .stroke(egui::Stroke::NONE)
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.heading("Display & Motion");
+                ui.add_space(6.0);
+                ui.toggle_value(&mut self.playhead_glow, "Playhead glow")
+                    .on_hover_text("Soft glow around the playhead line (Practice)");
                 ui.toggle_value(&mut self.reduced_motion, "Reduced motion");
                 ui.toggle_value(&mut self.high_contrast, "High contrast");
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.heading("Options");
+            });
+    }
+
+    fn ui_options_card(&mut self, ui: &mut Ui) {
+        let t = ui_theme::theme(self.ui_theme).tokens;
+        egui::Frame::group(ui.style())
+            .fill(t.neutral_surface)
+            .rounding(egui::Rounding::same(8.0))
+            .stroke(egui::Stroke::NONE)
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.heading("Sound & Behavior");
                 ui.add_space(6.0);
                 ui.toggle_value(&mut self.app_sounds, "App sounds");
                 ui.toggle_value(&mut self.auto_preview, "Auto preview");
@@ -2225,6 +2403,9 @@ impl SettingsPane {
             practice_tempo_scale_default: Some(self.practice_tempo_scale_default),
             ui_theme: Some(match self.ui_theme { ui_theme::ThemeMode::DarkNeon => "dark".into(), ui_theme::ThemeMode::LightNeumorphic => "light".into() }),
             reduced_motion: Some(self.reduced_motion),
+            accent_choice: Some(self.accent_choice.as_str().to_string()),
+            glass_mode: Some(self.glass_mode),
+            playhead_glow: Some(self.playhead_glow),
         }
     }
 
@@ -2256,6 +2437,9 @@ impl SettingsPane {
             self.ui_theme = if t == "light" { ui_theme::ThemeMode::LightNeumorphic } else { ui_theme::ThemeMode::DarkNeon };
         }
         self.reduced_motion = data.reduced_motion.unwrap_or(false);
+        if let Some(a) = &data.accent_choice { self.accent_choice = AccentChoice::from_str(a); }
+        self.glass_mode = data.glass_mode.unwrap_or(false);
+        self.playhead_glow = data.playhead_glow.unwrap_or(false);
         if let Some(name) = &data.audio_device {
             if let Some(i) = self.audio_devices.iter().position(|n| n == name) { self.selected_audio = Some(i); }
         }
@@ -2269,6 +2453,24 @@ impl SettingsPane {
         ui_theme::ensure_inter(ctx);
         // Base visuals from selected theme.
         ui_theme::apply(ctx, self.ui_theme);
+        // Accent overrides
+        let mut style = (*ctx.style()).clone();
+        let accent = self.accent_choice.color();
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.selection.stroke = egui::Stroke::new(1.0, style.visuals.widgets.noninteractive.fg_stroke.color);
+        // Make active/hovered widget fills respond to accent subtly so sliders/buttons feel alive
+        style.visuals.widgets.hovered.bg_fill = accent.linear_multiply(0.18).additive();
+        style.visuals.widgets.active.bg_fill = accent.linear_multiply(0.24).additive();
+        // Glass panels in Dark theme
+        if self.glass_mode && matches!(self.ui_theme, ui_theme::ThemeMode::DarkNeon) {
+            let mut v = style.visuals.clone();
+            let a = 240; // ~94% opacity
+            v.panel_fill = egui::Color32::from_rgba_unmultiplied(28, 31, 38, a);
+            v.widgets.noninteractive.bg_fill = egui::Color32::from_rgba_unmultiplied(28, 31, 38, a);
+            v.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(35, 40, 52, a);
+            style.visuals = v;
+        }
+        ctx.set_style(style);
         // High-contrast overlay tuned per theme instead of forcing Dark.
         if self.high_contrast {
             let mut style = (*ctx.style()).clone();
@@ -2589,6 +2791,9 @@ struct PersistedSettings {
     // Appearance
     ui_theme: Option<String>,
     reduced_motion: Option<bool>,
+    accent_choice: Option<String>,
+    glass_mode: Option<bool>,
+    playhead_glow: Option<bool>,
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -2709,3 +2914,34 @@ impl MarketplacePane {
 struct Ripple { beat: f64, piece: DrumPiece, start: Instant }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoopHandle { Start, End }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccentChoice { Blue, Orange, Green, Pink, Purple, Custom(egui::Color32) }
+
+impl AccentChoice {
+    fn color(self) -> egui::Color32 {
+        match self {
+            AccentChoice::Blue => egui::Color32::from_rgb(0, 180, 255),
+            AccentChoice::Orange => egui::Color32::from_rgb(255, 140, 66),
+            AccentChoice::Green => egui::Color32::from_rgb(34, 197, 94),
+            AccentChoice::Pink => egui::Color32::from_rgb(255, 46, 185),
+            AccentChoice::Purple => egui::Color32::from_rgb(140, 105, 255),
+            AccentChoice::Custom(c) => c,
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self { Self::Blue => "blue", Self::Orange => "orange", Self::Green => "green", Self::Pink => "pink", Self::Purple => "purple", Self::Custom(_) => "custom" }
+    }
+    fn from_str(s: &str) -> Self {
+        if let Some(rest) = s.strip_prefix("custom-") {
+            if rest.len() == 6 {
+                if let Ok(rgb) = u32::from_str_radix(rest, 16) {
+                    let r = ((rgb >> 16) & 0xFF) as u8;
+                    let g = ((rgb >> 8) & 0xFF) as u8;
+                    let b = (rgb & 0xFF) as u8;
+                    return Self::Custom(egui::Color32::from_rgb(r, g, b));
+                }
+            }
+        }
+        match s { "orange" => Self::Orange, "green" => Self::Green, "pink" => Self::Pink, "purple" => Self::Purple, "blue" => Self::Blue, _ => Self::Blue }
+    }
+}

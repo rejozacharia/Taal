@@ -48,6 +48,9 @@ pub fn dark_neon() -> Theme {
     visuals.widgets.active.bg_fill = tokens.neutral_panel.linear_multiply(1.1);
     visuals.widgets.hovered.bg_fill = tokens.neutral_panel.linear_multiply(1.15);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
+    // Sliders, selections use accent for strong visibility
+    visuals.selection.bg_fill = tokens.accent_cool;
+    visuals.selection.stroke = Stroke::new(1.0, tokens.text_primary);
 
     Theme { tokens, visuals }
 }
@@ -65,13 +68,13 @@ pub fn light_neumorphic() -> Theme {
     let mut visuals = Visuals::light();
     visuals.window_rounding = Rounding::same(10.0);
     visuals.panel_fill = tokens.neutral_bg;
-    // Increase contrast for controls on light background
+    // Increase contrast for controls on light background, without heavy outlines
     visuals.widgets.noninteractive.bg_fill = tokens.neutral_surface;
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_gray(190));
+    visuals.widgets.noninteractive.bg_stroke = Stroke::NONE; // remove text/button outlines
     visuals.widgets.inactive.bg_fill = tokens.neutral_panel; // tracks, buttons at rest
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_gray(200));
+    visuals.widgets.inactive.bg_stroke = Stroke::NONE;
     visuals.widgets.hovered.bg_fill = tokens.neutral_panel;
     visuals.widgets.active.bg_fill = tokens.neutral_surface;
     visuals.selection.bg_fill = tokens.accent_cool;

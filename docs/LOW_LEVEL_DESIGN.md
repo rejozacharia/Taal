@@ -158,7 +158,7 @@ Real‑time feedback rendering:
 Looping behavior:
 - Defaults: loop range = full chart; loop count = 2; countdown only on first loop; stop after final loop.
 - Pre‑roll countdown: counts in seconds (1 per second), with audio click and a centered numeral overlay on a soft circular background.
-- A/B loop: optional region [A,B] set from UI; used as loop/playback range instead of full chart. Draggable A/B handles appear in the ruler (Studio implemented; Practice planned); numeric A/B editable in the dock.
+- A/B loop: optional region [A,B] set from UI; used as loop/playback range instead of full chart. Draggable A/B handles appear in the ruler (Studio and Practice); numeric A/B editable in the dock.
 - Loop behavior: Free Play loops indefinitely and never shows Review; Test loops N times before Review (N from Settings “Test loops before review”, default 2).
 - Review overlay: centered card with accuracy percentage and per‑instrument counts rendered in a consistent lane order.
 - Transport controls: Play/Pause, BPM with integer label, Loop toggle, Metronome gain as integer percent.
